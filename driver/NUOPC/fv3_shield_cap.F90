@@ -159,36 +159,36 @@ module fv3_shield_cap
 
   ! ----- namelist -----
   integer, dimension(6) :: current_date = (/ 0, 0, 0, 0, 0, 0 /) !< The date that the current integration starts with
-  character(len=17) :: calendar = '                 '  !< The calendar type used by the current integration.  Valid values are
+  character(len=17) :: calendar = '                 '   !< The calendar type used by the current integration.  Valid values are
                                                         !! consistent with the time_manager module: 'gregorian', 'julian',
                                                         !! 'noleap', or 'thirty_day'. The value 'no_calendar' cannot be used
                                                         !! because the time_manager's date !! functions are used.
                                                         !! All values must be lower case.
-  logical :: force_date_from_namelist = .false.  !< Flag that determines whether the namelist variable current_date should override
+  logical :: force_date_from_namelist = .false.   !< Flag that determines whether the namelist variable current_date should override
                                                   !! the date in the restart file `INPUT/coupler.res`.  If the restart file does not
                                                   !! exist then force_date_from_namelist has no effect, the value of current_date
                                                   !! will be used.
-  integer :: years=0    !< Number of years the current integration will be run
-  integer :: months=0   !< Number of months the current integration will be run
-  integer :: days=0     !< Number of days the current integration will be run
-  integer :: hours=0    !< Number of hours the current integration will be run
-  integer :: minutes=0  !< Number of minutes the current integration will be run
-  integer :: seconds=0  !< Number of seconds the current integration will be run
-  integer :: dt_atmos = 0  !< Atmospheric model time step in seconds
-  integer :: dt_ocean = 0  !< Ocean model time step in seconds - NOT USED IN THIS MODEL
-  integer :: restart_days = 0  !< Time interval in days to write out intermediate restart files
-  integer :: restart_secs = 0  !< Time interval in seconds to write out intermediate restart files
-  integer :: restart_start_days = 0  !< Start time in days to write out intermediate restart files
-  integer :: restart_start_secs = 0  !< Start time in seconds to write out intermediate restart files
-  integer :: restart_days_aux = 0  !< Time interval in days for auxiliary restart files
-  integer :: restart_secs_aux = 0  !< Time interval in seconds for auxiliary restart files
-  integer :: restart_start_days_aux = 0  !< Start time in days for auxiliary restart files
-  integer :: restart_start_secs_aux = 0  !< Start time in days for auxiliary restart files
-  integer :: restart_duration_days_aux = 0  !< Duration in days for auxiliary restart files
-  integer :: restart_duration_secs_aux = 0  !< Duration in seconds for auxiliary restart files
-  integer :: atmos_nthreads = 1  !< Number of OpenMP threads to use in the atmosphere
-  logical :: use_hyper_thread = .false.  !< If .TRUE>, affinity placement (if activated) will consider virtual cores
-                                          !! in the placement algorithm
+  integer :: years=0                              !< Number of years the current integration will be run
+  integer :: months=0                             !< Number of months the current integration will be run
+  integer :: days=0                               !< Number of days the current integration will be run
+  integer :: hours=0                              !< Number of hours the current integration will be run
+  integer :: minutes=0                            !< Number of minutes the current integration will be run
+  integer :: seconds=0                            !< Number of seconds the current integration will be run
+  integer :: dt_atmos = 0                         !< Atmospheric model time step in seconds
+  integer :: dt_ocean = 0                         !< Ocean model time step in seconds - NOT USED IN THIS MODEL
+  integer :: restart_days = 0                     !< Time interval in days to write out intermediate restart files
+  integer :: restart_secs = 0                     !< Time interval in seconds to write out intermediate restart files
+  integer :: restart_start_days = 0               !< Start time in days to write out intermediate restart files
+  integer :: restart_start_secs = 0               !< Start time in seconds to write out intermediate restart files
+  integer :: restart_days_aux = 0                 !< Time interval in days for auxiliary restart files
+  integer :: restart_secs_aux = 0                 !< Time interval in seconds for auxiliary restart files
+  integer :: restart_start_days_aux = 0           !< Start time in days for auxiliary restart files
+  integer :: restart_start_secs_aux = 0           !< Start time in days for auxiliary restart files
+  integer :: restart_duration_days_aux = 0        !< Duration in days for auxiliary restart files
+  integer :: restart_duration_secs_aux = 0        !< Duration in seconds for auxiliary restart files
+  integer :: atmos_nthreads = 1                   !< Number of OpenMP threads to use in the atmosphere
+  logical :: use_hyper_thread = .false.           !< If .TRUE>, affinity placement (if activated) will consider virtual cores
+                                                  !! in the placement algorithm
   integer :: iau_offset = 0
 
   namelist /coupler_nml/ current_date, calendar, force_date_from_namelist, &
@@ -214,6 +214,9 @@ module fv3_shield_cap
   logical :: use_mlm = .false.
   logical :: use_gridcreate_addedges = .false.
   logical :: use_sfcpropwinds = .false.  ! Whether to use winds from intdiag data structure (default) or Sfcprop data structure
+
+  ! For running with atmosphere-ocean fluxes
+  logical :: use_aofluxes = .false.
 
   ! For setting up internal grid object
   logical :: use_mosaic=.false.
@@ -263,7 +266,18 @@ module fv3_shield_cap
                                                  farray_ts_som,                  & 
                                                  farray_c, farray_z,             &  ! Atmosphere imports from wave model
                                                  farray_sst,                     &  ! Atmosphere imports from ocean model
-                                                 farray_astdiff                     ! Post-processed air-sea temperature difference on atmosphere grid
+                                                 farray_ssu, farray_ssv,         &
+                                                 farray_astdiff,                 &  ! Post-processed air-sea temperature difference on atmosphere grid
+                                                 farray_taux,                    &  ! Atmosphere-ocean fluxes computed in atmosphere model: (Added 7/16/24)
+                                                 farray_tauy,                    &  ! See supported MOM6 imports here:
+                                                 farray_rain,                    &  ! https://github.com/NOAA-GFDL/MOM6/blob/2c1a9d32fce72828b7091e6f623c0ec20069e637/config_src/drivers/nuopc_cap/mom_cap_methods.F90#L105
+                                                 farray_lwnet,                   &
+                                                 farray_sen,                     &
+                                                 farray_evap,                    &
+                                                 farray_swndr,                   &
+                                                 farray_swndf,                   &
+                                                 farray_swvdr,                   &
+                                                 farray_swndf
 
   
 ! ! For using CMEPS with cpl_scalars:  (Added 7/1/24)
@@ -366,6 +380,10 @@ module fv3_shield_cap
 
     ! Use the fv3-shield's active coupled mixed layer model
     call support_get_logical(model,input_string='use_mlm',input_var=use_mlm,rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+
+    ! Access atmoshere model fluxes for export to CMEPS mediator
+    call support_get_logical(model,input_string='use_aofluxes',input_var=use_aofluxes,rc=rc)
     if (CheckError(rc,__LINE__,__FILE__)) return
 
     ! Add edges to the grid definition (NOT SUPPORTED, as of ESMF 8.5.0)
@@ -601,14 +619,21 @@ module fv3_shield_cap
             ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/FV3GFS/FV3GFS_io.F90#L272
             call advertise_support(importState,standard_name="Sw_z0rlen",LongName="roughness length",ShortName="z0rlen",rc=rc)
             if (CheckError(rc,__LINE__,__FILE__)) return
+        elseif (trim(Sa_import_names(i)).eq.'So_sst') then
+            call advertise_support(importState,standard_name="So_sst",LongName="sea surface foundation temperature",ShortName="sst",rc=rc)
+            if (CheckError(rc,__LINE__,__FILE__)) return
+!       elseif (trim(Sa_import_names(i)).eq.'So_ssu') then
+!           call advertise_support(importState,standard_name="So_ssu",LongName="sea surface zonal current",ShortName="ucur",rc=rc)
+!           if (CheckError(rc,__LINE__,__FILE__)) return
+!       elseif (trim(Sa_import_names(i)).eq.'So_ssv') then
+!           call advertise_support(importState,standard_name="So_ssv",LongName="sea surface meridional current",ShortName="vcur",rc=rc)
+!           if (CheckError(rc,__LINE__,__FILE__)) return
         else
-            output_string = "Sa_import_names(i) = "//trim(Sa_import_names(i))//" is not a valid import variable. Choose from: Sw_z0rlen, Sw_charno"
+            output_string = "Sa_import_names(i) = "//trim(Sa_import_names(i))//" is not a valid import variable. Choose from: Sw_z0rlen, Sw_charno, So_sst" !, So_ssu, So_ssv"
             call ESMF_LogWrite("fv3_shield_cap::Advertise:: "//trim(output_string), ESMF_LOGMSG_INFO)
         endif
     enddo
 
-!   call advertise_support(importState,standard_name="So_sst",LongName="ocean surface temperature",ShortName="sst",rc=rc)
-!   if (CheckError(rc,__LINE__,__FILE__)) return
 
     !----------
     ! Export
@@ -647,6 +672,11 @@ module fv3_shield_cap
     call advertise_support(exportState,standard_name="Sa_oceanfrac",LongName="ocean fraction [0:1]",ShortName="oceanfrac",rc=rc)
     if (CheckError(rc,__LINE__,__FILE__)) return
 
+    ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/FV3GFS/FV3GFS_io.F90#L267
+    ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/GFS_layer/GFS_typedefs.F90#L112
+    call advertise_support(exportState,standard_name="Sa_psurf",LongName="surface pressure (Pa)",ShortName="psurf",rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+
     ! Scalar data used by CMEPS describing grid
     if (flds_scalar_num > 0) then
         call NUOPC_Advertise(exportState, trim(flds_scalar_name), trim(flds_scalar_name), rc=rc)
@@ -671,15 +701,6 @@ module fv3_shield_cap
         ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/69d13c245348264f1bf12fd871261d5e25e36695/GFS_layer/GFS_typedefs.F90#L206
         call advertise_support(exportState,standard_name="Sa_fice",LongName="ice fraction over open water grid",ShortName="fice",rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
-
-        ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/FV3GFS/FV3GFS_io.F90#L267
-        ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/GFS_layer/GFS_typedefs.F90#L112
-        call advertise_support(exportState,standard_name="Sa_psurf",LongName="surface pressure (Pa)",ShortName="psurf",rc=rc)
-        if (CheckError(rc,__LINE__,__FILE__)) return
-
-!       ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/FV3GFS/FV3GFS_io.F90#L270C55-L270C55
-!       call advertise_support(exportState,standard_name="Sa_tisfc",LongName="surface ice temperature",ShortName="tisfc",rc=rc)
-!       if (CheckError(rc,__LINE__,__FILE__)) return
 
         ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/FV3GFS/FV3GFS_io.F90#L314
         call advertise_support(exportState,standard_name="Sa_q2m",LongName="atmosphere humidity at 2m height",ShortName="q2m",rc=rc)
@@ -725,6 +746,42 @@ module fv3_shield_cap
         call advertise_support(exportState,standard_name="Sa_hvml",LongName="ocean meridional current * MLD",ShortName="hvml",rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
     endif
+
+    ! Add FLUXES - 7/16/24
+    ! 
+    if (use_aofluxes) then
+        call advertise_support(exportState,standard_name="Faxa_taux",LongName="inst_zonal_moment_flx",ShortName="taux",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_tauy",LongName="inst_merid_moment_flx_atm",ShortName="tauy",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_rain",LongName="inst_prec_rate",ShortName="prate",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_lwnet",LongName="inst_net_lw_flx",ShortName="lwnet",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_sen",LongName="inst_sensi_heat_flx",ShortName="sen",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_evap",LongName="inst_evap_rate",ShortName="evap",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_swndr",LongName="inst_down_sw_ir_dir_flx",ShortName="swndr",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_swndf",LongName="inst_down_sw_ir_dif_flx",ShortName="swndf",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_swvdr",LongName="inst_down_sw_vis_dir_flx",ShortName="swvdr",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+
+        call advertise_support(exportState,standard_name="Faxa_swvdf",LongName="inst_down_sw_vis_dif_flx",ShortName="swvdf",rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+    endif
+
+
 
     ! -----------------------------------------------
     ! Set internal fv3 clock timing information
@@ -1203,6 +1260,71 @@ module fv3_shield_cap
         if (CheckError(rc,__LINE__,__FILE__)) return 
     endif
 
+
+    ! Add FLUXES - 7/16/24
+
+    if (use_aofluxes) then
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_taux",farray_taux,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_tauy",farray_tauy,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_rain",farray_rain,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_lwnet",farray_lwnet,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_sen",farray_sen,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_evap",farray_evap,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_swndr",farray_swndr,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_swndf ",farray_swndf ,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_swvdr",farray_swvdr,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+        ! Allocate space for this field's data
+        call fpointer_allocate(field,gridOut,"Faxa_swvdf",farray_swvdf,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        call NUOPC_Realize(exportState, field=field, rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+
+    endif
     
     !--------------------------------------------------------------------------
     ! Importable fields
@@ -1224,8 +1346,33 @@ module fv3_shield_cap
 
             call NUOPC_Realize(importState, field=field, rc=rc)
             if (CheckError(rc,__LINE__,__FILE__)) return
+
+        elseif (trim(Sa_import_names(i)).eq.'So_sst') then
+            ! Allocate space for this field's data
+            call fpointer_allocate(field,gridIn,"So_sst",farray_sst,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+            if (CheckError(rc,__LINE__,__FILE__)) return
+
+            call NUOPC_Realize(importState, field=field, rc=rc)
+            if (CheckError(rc,__LINE__,__FILE__)) return
+
+!       elseif (trim(Sa_import_names(i)).eq.'So_ssu') then
+!           ! Allocate space for this field's data
+!           call fpointer_allocate(field,gridIn,"So_ssu",farray_ssu,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+!           if (CheckError(rc,__LINE__,__FILE__)) return
+
+!           call NUOPC_Realize(importState, field=field, rc=rc)
+!           if (CheckError(rc,__LINE__,__FILE__)) return
+
+!       elseif (trim(Sa_import_names(i)).eq.'So_ssv') then
+!           ! Allocate space for this field's data
+!           call fpointer_allocate(field,gridIn,"So_ssv",farray_ssv,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+!           if (CheckError(rc,__LINE__,__FILE__)) return
+
+!           call NUOPC_Realize(importState, field=field, rc=rc)
+!           if (CheckError(rc,__LINE__,__FILE__)) return
+
         else
-            output_string = "Sa_import_names(i) = "//trim(Sa_import_names(i))//" is not a valid import variable. Choose from: Sw_z0rlen, Sw_charno"
+            output_string = "Sa_import_names(i) = "//trim(Sa_import_names(i))//" is not a valid import variable. Choose from: Sw_z0rlen, Sw_charno, So_sst" !, So_ssu, So_ssv"
             call ESMF_LogWrite("fv3_shield_cap::Realize:: "//trim(output_string), ESMF_LOGMSG_INFO)
         endif
     enddo
@@ -1743,14 +1890,26 @@ module fv3_shield_cap
             if (CheckError(rc,__LINE__,__FILE__)) return
             if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (after) support_getImport Sw_z0rlen"
 
-!       elseif (trim(Sa_import_names(i)).eq.'So_sst') then
-!           if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (before) support_getImport So_sst"
-!           call support_getImport(importState,itemName='So_sst',rc=rc)    
+        elseif (trim(Sa_import_names(i)).eq.'So_sst') then
+            if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (before) support_getImport So_sst"
+            call support_getImport(importState,itemName='So_sst',rc=rc)    
+            if (CheckError(rc,__LINE__,__FILE__)) return
+            if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (after) support_getImport So_sst"
+ 
+!       elseif (trim(Sa_import_names(i)).eq.'So_ssu') then
+!           if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (before) support_getImport So_ssu"
+!           call support_getImport(importState,itemName='So_ssu',rc=rc)    
 !           if (CheckError(rc,__LINE__,__FILE__)) return
-!           if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (after) support_getImport So_sst"
-!
+!           if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (after) support_getImport So_ssu"
+
+!       elseif (trim(Sa_import_names(i)).eq.'So_ssv') then
+!           if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (before) support_getImport So_ssv"
+!           call support_getImport(importState,itemName='So_ssv',rc=rc)    
+!           if (CheckError(rc,__LINE__,__FILE__)) return
+!           if (dodebug_getImport) print *, "fv3_shield_cap.F90::getImport:: (after) support_getImport So_ssv"
+
         else
-            output_string = "Sa_import_names(i) = "//trim(Sa_import_names(i))//" is not a valid import variable. Choose from: Sw_z0rlen, Sw_charno"
+            output_string = "Sa_import_names(i) = "//trim(Sa_import_names(i))//" is not a valid import variable. Choose from: Sw_z0rlen, Sw_charno, So_sst" !, So_ssu, So_ssv"
             call ESMF_LogWrite("fv3_shield_cap::getImport:: "//trim(output_string), ESMF_LOGMSG_INFO)
         endif
     enddo
@@ -1818,7 +1977,7 @@ module fv3_shield_cap
               print *, "i,j,nb,ix = ", i,j,nb,ix
               print *, "associated(IPD_Data(nb)%Sfcprop%zorl     = ", associated(IPD_Data(nb)%Sfcprop%zorl)
               print *, "associated(IPD_Data(nb)%Sfcprop%charnock = ", associated(IPD_Data(nb)%Sfcprop%charnock)
-!             print *, "associated(IPD_Data(nb)%Sfcprop%tsfc     = ", associated(IPD_Data(nb)%Sfcprop%tsfc)
+              print *, "associated(IPD_Data(nb)%Sfcprop%tsfc     = ", associated(IPD_Data(nb)%Sfcprop%tsfc)
               print *, "isc,iec, jsc,jec = ", isc,iec,jsc,jec
           endif
 
@@ -2087,6 +2246,42 @@ module fv3_shield_cap
         call support_setExport_blockdatacopy(exportState,itemName='Sa_hvml',rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
 
+    endif
+
+    ! Add FLUXES - 7/16/24
+
+    if (use_aofluxes) then
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_taux',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_tauy',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_rain',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_lwnet',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_sen',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_evap',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_swndr',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_swndf',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_swvdr',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
+        call support_setExport_blockdatacopy(exportState,itemName='Faxa_swvdf',rc=rc)
+        if (CheckError(rc,__LINE__,__FILE__)) return 
+        
     endif
 
 
@@ -2582,6 +2777,124 @@ module fv3_shield_cap
 
               call block_data_copy(dataPtr_r8, IPD_Data(nb)%Sfcprop%hvml, Atm_block, nb, rc=rc)
               if (CheckError(rc,__LINE__,__FILE__)) return
+
+      ! Add FLUXES - 7/16/24
+          elseif (trim(itemName)=='Faxa_taux') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L1331
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L404
+
+              if (.not. associated(IPD_Data(nb)%intdiag%dusfci)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%intdiag%dusfci is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%dusfci, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_tauy') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L1332
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L405
+
+              if (.not. associated(IPD_Data(nb)%intdiag%dvsfci)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%intdiag%dvsfci is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%dvsfci, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_rain') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L1357C39-L1357C42
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L384
+              ! WARNING - this says 'total precip', but CMEPS seems to expect instantaneous precip rate
+
+              if (.not. associated(IPD_Data(nb)%intdiag%pfr)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%intdiag%pfr is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%,pfr Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_lwnet') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L1324
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L408
+              
+              if (.not. associated(IPD_Data(nb)%intdiag%dlwsfci)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%intdiag%dlwsfci is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%dlwsfci, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_sen') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L1333
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L406
+              
+              if (.not. associated(IPD_Data(nb)%intdiag%dtsfci)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%intdiag%dtsfci is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%dtsfci, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_evap') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L1336
+              
+              if (.not. associated(IPD_Data(nb)%intdiag%epi)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%intdiag%epi is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%epi, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_swndr') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L341
+              
+              if (.not. associated(IPD_Data(nb)%coupling%nirbmdi)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%coupling%nirbmdi is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%coupling%nirbmdi, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_swndf') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L342
+              
+              if (.not. associated(IPD_Data(nb)%coupling%nirdfdi)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%coupling%nirdfdi is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%coupling%nirdfdi, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_swvdr') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L343
+              
+              if (.not. associated(IPD_Data(nb)%coupling%visbmdi)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%coupling%visbmdi is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%coupling%visbmdi, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
+          elseif (trim(itemName)=='Faxa_swvdf') then
+              ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/c8c5d3061b317266cec688acec3e7e33ad8a78a0/GFS_layer/GFS_typedefs.F90#L344
+              
+              if (.not. associated(IPD_Data(nb)%coupling%visdfdi)) then
+                  call ESMF_LogWrite(trim("[DEBUG] fv3_shield_cap::setExport:: ERROR - IPD_Data(nb)%coupling%visdfdi is not associated. EXITING..."), ESMF_LOGMSG_INFO, rc=rc)
+                  stop(1)
+              endif
+
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%coupling%visdfdi, Atm_block, nb, rc=rc)
+              if (CheckError(rc,__LINE__,__FILE__)) return
+
 
           else
               print *, "fv3_shield_cap::setExport::support_setExport:: variable name {"//trim(itemName)//"} not recognized. EXITING..."

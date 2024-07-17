@@ -2813,7 +2813,7 @@ module fv3_shield_cap
                   stop(1)
               endif
 
-              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%,pfr Atm_block, nb, rc=rc)
+              call block_data_copy(dataPtr_r8, IPD_Data(nb)%intdiag%pfr Atm_block, nb, rc=rc)
               if (CheckError(rc,__LINE__,__FILE__)) return
 
           elseif (trim(itemName)=='Faxa_lwnet') then

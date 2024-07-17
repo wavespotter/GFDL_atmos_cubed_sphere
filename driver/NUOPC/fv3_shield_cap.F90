@@ -277,7 +277,7 @@ module fv3_shield_cap
                                                  farray_swndr,                   &
                                                  farray_swndf,                   &
                                                  farray_swvdr,                   &
-                                                 farray_swndf
+                                                 farray_swvdf
 
   
 ! ! For using CMEPS with cpl_scalars:  (Added 7/1/24)

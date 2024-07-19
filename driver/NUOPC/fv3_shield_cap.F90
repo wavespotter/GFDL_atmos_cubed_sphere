@@ -669,12 +669,12 @@ module fv3_shield_cap
     call advertise_support(exportState,standard_name="Sa_astdiff",LongName="air-sea temperature difference",ShortName="astdiff",rc=rc)
     if (CheckError(rc,__LINE__,__FILE__)) return
 
-    call advertise_support(exportState,standard_name="Sa_oceanfrac",LongName="ocean fraction [0:1]",ShortName="oceanfrac",rc=rc)
-    if (CheckError(rc,__LINE__,__FILE__)) return
-
     ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/FV3GFS/FV3GFS_io.F90#L267
     ! https://github.com/NOAA-GFDL/SHiELD_physics/blob/0ff11e85972c48057f8d4d5f08322d9fdc0fb7f2/GFS_layer/GFS_typedefs.F90#L112
     call advertise_support(exportState,standard_name="Sa_psurf",LongName="surface pressure (Pa)",ShortName="psurf",rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+
+    call advertise_support(exportState,standard_name="Sa_oceanfrac",LongName="ocean fraction [0:1]",ShortName="oceanfrac",rc=rc)
     if (CheckError(rc,__LINE__,__FILE__)) return
 
     ! Scalar data used by CMEPS describing grid
@@ -1080,6 +1080,17 @@ module fv3_shield_cap
     if (CheckError(rc,__LINE__,__FILE__)) return
 
     !------------------
+    ! exportable field: surface pressure
+    !------------------
+    
+    ! Allocate space for this field's data
+    call fpointer_allocate(field,gridOut,"Sa_psurf",farray_psurf,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+    
+    call NUOPC_Realize(exportState, field=field, rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+    
+    !------------------
     ! exportable field: astdiff (post-processed)
     !------------------
 
@@ -1144,17 +1155,6 @@ module fv3_shield_cap
         call NUOPC_Realize(exportState, field=field, rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
     
-    
-        !------------------
-        ! exportable field: surface pressure
-        !------------------
-    
-        ! Allocate space for this field's data
-        call fpointer_allocate(field,gridOut,"Sa_psurf",farray_psurf,staggerloc=ESMF_STAGGERLOC_CENTER,rc=rc)
-        if (CheckError(rc,__LINE__,__FILE__)) return
-    
-        call NUOPC_Realize(exportState, field=field, rc=rc)
-        if (CheckError(rc,__LINE__,__FILE__)) return
     
         !------------------
         ! exportable field: atmospheric humidity at 2m
@@ -2144,6 +2144,12 @@ module fv3_shield_cap
     call support_setExport_blockdatacopy(exportState,itemName='Sa_tsfc',rc=rc)
     if (CheckError(rc,__LINE__,__FILE__)) return
 
+    call support_setExport_blockdatacopy(exportState,itemName='Sa_psurf',rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+    
+    call support_setExport_blockdatacopy(exportState,itemName='Sa_oceanfrac',rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+    
     ! For sending cpl_scalar grid information to CMEPS
     ! from: https://github.com/NOAA-EMC/fv3atm/blob/10cd0231282388da16d22a0aae22a1722b773720/cpl/module_cplscalars.F90#L113
     if (flds_scalar_num>0) then
@@ -2155,9 +2161,6 @@ module fv3_shield_cap
         call support_setExport_blockdatacopy(exportState,itemName='Sa_slmsk',rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
     
-        call support_setExport_blockdatacopy(exportState,itemName='Sa_oceanfrac',rc=rc)
-        if (CheckError(rc,__LINE__,__FILE__)) return
-    
         call support_setExport_blockdatacopy(exportState,itemName='Sa_landfrac',rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
     
@@ -2165,9 +2168,6 @@ module fv3_shield_cap
         if (CheckError(rc,__LINE__,__FILE__)) return
     
         call support_setExport_blockdatacopy(exportState,itemName='Sa_fice',rc=rc)
-        if (CheckError(rc,__LINE__,__FILE__)) return
-    
-        call support_setExport_blockdatacopy(exportState,itemName='Sa_psurf',rc=rc)
         if (CheckError(rc,__LINE__,__FILE__)) return
     
         call support_setExport_blockdatacopy(exportState,itemName='Sa_q2m',rc=rc)

@@ -235,6 +235,9 @@ module fv3_shield_cap
   logical :: dodebug_DataInitialize = .false.
   logical :: dodebug_Advance = .false.
   logical :: dodebug_Finalize = .false.
+  logical :: dodebug_Finalize_skip_fmsend = .false.
+  logical :: dodebug_Finalize_couplerend_skip_fmsdiagend = .false.
+  logical :: dodebug_Finalize_couplerend_skip_fmsioexit = .false.
   logical :: dodebug_bypassImport = .false.
   logical :: dodebug_bypassExport = .false.
   logical :: dodebug_getImport = .false.
@@ -456,6 +459,15 @@ module fv3_shield_cap
     if (CheckError(rc,__LINE__,__FILE__)) return
 
     call support_get_logical(model,input_string='dodebug_Finalize',input_var=dodebug_Finalize,rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+
+    call support_get_logical(model,input_string='dodebug_Finalize_skip_fmsend',input_var=dodebug_Finalize_skip_fmsend,rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+
+    call support_get_logical(model,input_string='dodebug_Finalize_couplerend_skip_fmsdiagend',input_var=dodebug_Finalize_couplerend_skip_fmsdiagend,rc=rc)
+    if (CheckError(rc,__LINE__,__FILE__)) return
+
+    call support_get_logical(model,input_string='dodebug_Finalize_couplerend_skip_fmsioexit',input_var=dodebug_Finalize_couplerend_skip_fmsioexit,rc=rc)
     if (CheckError(rc,__LINE__,__FILE__)) return
 
     call support_get_logical(model,input_string='dodebug_bypassImport',input_var=dodebug_bypassImport,rc=rc)
@@ -3151,31 +3163,54 @@ module fv3_shield_cap
     integer, intent(out)       :: rc
 
     ! local variables
-    character(len=*),parameter :: subname='fv3_shield_cap::Finalize'
+    character(len=*),parameter :: subname='(fv3_shield_cap::Finalize)'
     integer                    :: i, urc
     type(ESMF_VM)              :: vm
     
     logical :: dodebug
     
-    dodebug = dodebug_Finalize
-
     rc = ESMF_SUCCESS
  
     ! TRACE start: Finalize ----------------------------------------------------
     call ESMF_TraceRegionEnter(trim(subname), rc=rc)
 
+    if (dodebug_Finalize) then
+        call ESMF_LogWrite(trim(subname)//":: call fms_mpp_set_current_pelist()...", ESMF_LOGMSG_INFO)
+    endif
     call fms_mpp_set_current_pelist()
+
+    if (dodebug_Finalize) then
+        call ESMF_LogWrite(trim(subname)//":: call fms_mpp_clock_end(mainClock)...", ESMF_LOGMSG_INFO)
+    endif
     call fms_mpp_clock_end(mainClock)
 
+    if (dodebug_Finalize) then
+        call ESMF_LogWrite(trim(subname)//":: call fms_mpp_clock_begin(termClock)...", ESMF_LOGMSG_INFO)
+    endif
     termClock = fms_mpp_clock_id( '-Termination' )
     call fms_mpp_clock_begin(termClock)
 
+    if (dodebug_Finalize) then
+        call ESMF_LogWrite(trim(subname)//":: call coupler_end...", ESMF_LOGMSG_INFO)
+    endif
     call coupler_end
 
+    if (dodebug_Finalize) then
+        call ESMF_LogWrite(trim(subname)//":: call fms_mpp_set_current_pelist()...", ESMF_LOGMSG_INFO)
+    endif
     call fms_mpp_set_current_pelist()
+
+    if (dodebug_Finalize) then
+        call ESMF_LogWrite(trim(subname)//":: call fms_mpp_clock_end(termClock)...", ESMF_LOGMSG_INFO)
+    endif
     call fms_mpp_clock_end(termClock)
 
-    call fms_end
+    if (dodebug_Finalize_skip_fmsend) then 
+        call ESMF_LogWrite(trim(subname)//":: Skipping call fms_end to test output segfault...", ESMF_LOGMSG_INFO) 
+    else
+        call ESMF_LogWrite(trim(subname)//":: call fms_end...", ESMF_LOGMSG_INFO)
+        call fms_end
+    endif
 
     !STEVE: clean up after module-wide allocation in the Realize routine
     !Note run-time error: forrtl: severe (173): A pointer passed to DEALLOCATE points to an object that cannot be deallocated
@@ -3623,6 +3658,7 @@ module fv3_shield_cap
 
     integer :: date_fv3(6)
     integer :: restart_unit !< Unit for the coupler restart file
+    character(len=*),parameter :: subname='(fv3_shield_cap::coupler_end)'
 
     call atmos_model_end (Atm)
 
@@ -3652,11 +3688,21 @@ module fv3_shield_cap
     endif
 
     !----- final output of diagnostic fields ----
-    call fms_diag_end (Atm%Time)
+    if (dodebug_Finalize_couplerend_skip_fmsdiagend) then
+        call ESMF_LogWrite(trim(subname)//":: Skipping call fms_diag_end(Atm%Time) to test output segfault...", ESMF_LOGMSG_INFO)
+    else
+        call ESMF_LogWrite(trim(subname)//":: call fms_diag_end (Atm%Time)...", ESMF_LOGMSG_INFO)
+        call fms_diag_end (Atm%Time)
+    endif
 
     !----- to be removed once fms_io is fully deprecated -----
     #ifdef use_deprecated_io
-    call fms_io_exit()
+    if (dodebug_Finalize_couplerend_skip_fmsioexit) then
+        call ESMF_LogWrite(trim(subname)//":: Skipping call fms_io_exit() to test output segfault...", ESMF_LOGMSG_INFO)
+    else
+        call ESMF_LogWrite(trim(subname)//":: call fms_io_exit()...", ESMF_LOGMSG_INFO)
+        call fms_io_exit()
+    endif
     #endif
 
   end subroutine coupler_end

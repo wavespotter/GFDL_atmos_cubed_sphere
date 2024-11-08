@@ -575,7 +575,7 @@ subroutine read_iau_tiles(IPD_Control,increments,infile)
     logical :: Fv_inc_tile_is_open = .true.
     character(256) :: fname, field_name
     character(16) :: format_string
-    integer :: i, length
+    integer :: i, l, length, ierr
 
     ! Read in the increment tile
     ! Note: https://github.com/NOAA-GFDL/FMS/blob/7a73eaa7aa76b5f8336a7bebe55c669b3375aab2/fms2_io/fms_io_utils.F90#L804

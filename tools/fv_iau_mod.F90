@@ -272,7 +272,7 @@ subroutine IAU_initialize (IPD_Control, IAU_Data, Init_parm)
             agrid)
         deallocate ( lon, lat, agrid )
 
-    endif : IPD_Control%iau_interp_g2c
+    endif
 
     ! ----------------------------------------------------------------------------
     ! Allocate space for 2 steps of the increments, which can be interpolated in time

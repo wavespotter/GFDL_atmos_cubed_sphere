@@ -566,9 +566,6 @@ end subroutine read_iau_forcing
 ! Sofar added (11/5/24) - read tiled files on native model (restart) grid
 subroutine read_iau_tiles(IPD_Control,increments,infile)
 
-    ! This reads the tiled IAU increment netcdf file and stores to memory 
-    use fms_io_utils_mod, only: has_domain_tile_string
-
     type (IPD_control_type), intent(in) :: IPD_Control
     type(iau_internal_data_type), intent(inout):: increments
     character(len=*),  intent(in) :: infile
@@ -730,6 +727,40 @@ subroutine interp_inc(field_name,var,jbeg,jend)
 end subroutine interp_inc
 
 #endif
+
+
+!> @brief Determine if the "domain tile string" (.tilex.) exists in the input filename.
+!! @internal function from FMS: https://github.com/NOAA-GFDL/FMS/blob/644cbd3d5d78a76a2d53604730b4cc042727bdaa/fms2_io/fms_io_utils.F90#L308
+function has_domain_tile_string(string) &
+  result(has_string)
+
+  character(len=*), intent(in) :: string !< Input string.
+  logical :: has_string
+
+  integer :: l
+  integer :: i, j
+
+  has_string = .false.
+! Assigns i to the index where ".tile" starts
+  i = index(trim(string), ".tile", back=.true.)
+  if (i .ne. 0) then
+    l = len_trim(string)
+! Sets i to the index after .tile
+    i = i + 5
+    j = i
+    do while (i .le. l)
+! If the ith characters is a dot but i not equal to the index after .tile set has_string to true
+      if (verify(string(i:i), ".") .eq. 0 .and. j .ne. i) then
+        has_string = .true.
+        exit
+! If the ith characters is NOT a number exit function and has_string will stay as false
+      elseif (verify(string(i:i), "0123456789") .ne. 0) then
+        exit
+      endif
+      i = i + 1
+    enddo
+  endif
+end function has_domain_tile_string
 
 end module fv_iau_mod
 

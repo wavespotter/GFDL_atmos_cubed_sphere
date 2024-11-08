@@ -573,7 +573,8 @@ subroutine read_iau_tiles(IPD_Control,increments,infile)
     integer :: is,  ie,  js,  je
     integer :: tile_num
     logical :: Fv_inc_tile_is_open = .true.
-    character(*) :: fname, format_string
+    character(256) :: fname, field_name
+    character(16) :: format_string
     integer :: i, length
 
     ! Read in the increment tile
@@ -603,7 +604,7 @@ subroutine read_iau_tiles(IPD_Control,increments,infile)
         write (fname,format_string) infile(1:i-1), '.', tile_num, infile(i:length)
     endif
 
-    print('read_iau_tiles:: reading tile increment file:', fname)
+    print *, 'read_iau_tiles:: reading tile increment file:', trim(fname)
 
     is  = IPD_Control%isc
     ie  = is + IPD_Control%nx-1

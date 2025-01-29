@@ -41,19 +41,21 @@ module fv_eta_mod
  contains
 
  !This is the version of set_eta used in SHiELD and AM4
- subroutine set_eta(km, ak, bk, npz_type)
+ subroutine set_eta(km, ak, bk, npz_type, dzmax_in, stretch_fac_u_in, stretch_fac_in, pint_in, ptop_in, k_inc_in, s0_in, s_k_inc_in)
 
 !Level definitions are now in this header file
 #include <fv_eta.h>
 
    integer,  intent(in)::  km           ! vertical dimension
+   integer,  intent(in), optional::k_inc_in
    real, intent(out):: ak(km+1)
    real, intent(out):: bk(km+1)
    character(24), intent(IN) :: npz_type
+   real, intent(in), optional :: stretch_fac_in, pint_in, ptop_in, s0_in, s_k_inc_in, stretch_fac_u_in, dzmax_in
    character(len=:), dimension(:), allocatable :: eta_level_unit
 
-   real :: ptop
-   integer :: ks
+   real :: ptop, pint, s_k_inc, stretch_fac, s0, dzmax, stretch_fac_u
+   integer :: ks, k_inc, nfilter
 
    real:: p0=1000.E2
    real:: pc=200.E2
@@ -63,12 +65,74 @@ module fv_eta_mod
    integer :: l, k
    integer :: var_fn = 0
 
-   real :: pint = 100.E2
-   real :: stretch_fac = 1.03
+   !---- Default parameters:
+   real, parameter :: stretch_fac_default = 1.03
+   real, parameter :: pint_default = 100.E2
+   real, parameter :: ptop_default = 1.
+   integer, parameter:: k_inc_default = 25   ! # of layers from bottom up to near const dz region
+   real, parameter:: s0_default = 0.13 ! lowest layer stretch factor
+   real, parameter :: s_k_inc_default = 1.0
+   real, parameter :: dzmax_default = 2000.
+   real, parameter :: stretch_fac_u_default = 1.2
+   !-----------------------
    integer :: auto_routine = 0
 
+   if (present(stretch_fac_in)) then
+      stretch_fac = stretch_fac_in
+   else
+      stretch_fac = stretch_fac_default
+   end if
 
-   ptop = 1.
+   if (present(pint_in)) then
+      pint = pint_in
+   else
+      pint = pint_default
+   end if
+
+   if (present(ptop_in)) then
+      ptop = ptop_in
+   else
+      ptop = ptop_default
+   end if
+
+   if (present(k_inc_in)) then
+      k_inc = k_inc_in
+   else
+      k_inc = k_inc_default
+   end if
+
+   if (present(k_inc_in)) then
+      s0 = s0_in
+   else
+      s0 = s0_default
+   end if
+
+   if (present(s_k_inc_in)) then
+      s_k_inc = s_k_inc_in
+   else
+      s_k_inc = s_k_inc_default
+   end if
+
+   if (present(dzmax_in)) then
+      dzmax = dzmax_in
+   else
+      dzmax = dzmax_default
+   end if
+
+   if (present(stretch_fac_u_in)) then
+      stretch_fac_u = stretch_fac_u_in
+   else
+      stretch_fac_u = stretch_fac_u_default
+   end if
+
+   print*, 'stretch factor: ', stretch_fac
+   print*, 'pint: ', pint
+   print*, 'ptop: ', ptop
+   print*, 's0: ', s0
+   print*, 's_k_inc: ', s_k_inc
+   print*, 'k_inc: ', k_inc
+
+
 
    ! Definition: press(i,j,k) = ak(k) + bk(k) * ps(i,j)
 
@@ -114,8 +178,11 @@ module fv_eta_mod
 ! Jili Dong add ak/bk input
       print*, 'input type not supported'
 
+   else if (trim(npz_type) == 'wrf') then
+      auto_routine = 7
+   elseif (trim(npz_type) == 'gfs_type') then
+      auto_routine = 6
    else
-
       select case (km)
 
       case (5,10) ! does this work????
@@ -426,9 +493,6 @@ module fv_eta_mod
 
          ! NGGPS_GFS
       case (91)
-         pint = 100.E2
-         ptop = 40.
-         stretch_fac = 1.029
          auto_routine = 6
 
       case (95)
@@ -546,7 +610,9 @@ module fv_eta_mod
    case (5)
       call var_dz(km, ak, bk, ptop, ks, pint, stretch_fac)
    case (6)
-      call var_gfs(km, ak, bk, ptop, ks, pint, stretch_fac)
+      call var_gfs(km, ak, bk, ptop, ks, pint, stretch_fac, k_inc, s0, s_k_inc)
+   case (7)
+      call var_wrf(km, ak, bk, ptop, ks, pint, stretch_fac, stretch_fac_u, s0, dzmax)
    end select
 
    ptop = ak(1)
@@ -555,9 +621,14 @@ module fv_eta_mod
    call check_eta_levels (ak, bk)
 
    if (is_master()) then
-      write(*, '(A4, A13, A13, A11)') 'klev', 'ak', 'bk', 'p_ref'
+      write(*, '(A4, A13, A13, A11, A11)') 'klev', 'ak', 'bk', 'p_ref', 'p_full'
       do k=1,km+1
-         write(*,'(I4, F13.5, F13.5, F11.2)') k, ak(k), bk(k), 1000.E2*bk(k) + ak(k)
+         if (k.le.km) then
+            press(k) = (1000.E2*bk(k+1) + ak(k+1) - (1000.E2*bk(k) + ak(k))) / log((1000.E2*bk(k+1) + ak(k+1))/(1000.E2*bk(k) + ak(k)))
+         else
+            press(k) = -999.
+         end if
+         write(*,'(I4, F13.5, F13.5, F11.2, F11.2)') k, ak(k), bk(k), 1000.E2*bk(k) + ak(k), press(k)
       enddo
    endif
 
@@ -751,9 +822,11 @@ module fv_eta_mod
 
 
 
- subroutine var_gfs(km, ak, bk, ptop, ks, pint, s_rate)
-  integer, intent(in):: km
-  real,    intent(in):: ptop
+ subroutine var_gfs(km, ak, bk, ptop, ks, pint, s_rate, k_inc, s0, s_k_inc_in)
+  integer, intent(in):: km 
+  integer, intent(in) :: k_inc
+  real,    intent(in):: ptop, s_k_inc_in
+  real,    intent(in) ::s0
   real,    intent(in):: s_rate        ! between [1. 1.1]
   real,    intent(out):: ak(km+1), bk(km+1)
   real,    intent(inout):: pint
@@ -764,11 +837,8 @@ module fv_eta_mod
   real, dimension(km):: dz, s_fac, dlnp
   real ztop, t0, dz0, sum1, tmp1
   real ep, es, alpha, beta, gama
-!---- Tunable parameters:
-  integer:: k_inc = 25   ! # of layers from bottom up to near const dz region
-  real:: s0 = 0.13 ! lowest layer stretch factor
-!-----------------------
-  real:: s_inc
+
+  real:: s_inc, s_k_inc, s_increase_factor
   integer  k
 
      pe1(1) = ptop
@@ -778,8 +848,9 @@ module fv_eta_mod
 
      t0 = 270.
      ztop = rdgas/grav*t0*(peln(km+1) - peln(1))
-
-      s_inc = (1.-s0) / real(k_inc)
+     
+      s_k_inc = s_k_inc_in
+      s_inc = (s_k_inc-s0) / real(k_inc)
       s_fac(km)  = s0
 
       do k=km-1, km-k_inc, -1
@@ -914,6 +985,154 @@ module fv_eta_mod
       endif
 
  end subroutine var_gfs
+
+ subroutine var_wrf(km, ak, bk, ptop, ks, pint, stretch_fac_s, stretch_fac_u, s0, dzmax)
+   integer, intent(in):: km 
+   real,    intent(in):: ptop, s0
+   real,    intent(in):: stretch_fac_s, stretch_fac_u, dzmax
+   real,    intent(out):: ak(km+1), bk(km+1)
+   real,    intent(inout):: pint
+   integer, intent(out):: ks
+ ! Local
+   real, parameter:: p00 = 1.E5
+   real, dimension(km+1):: ze, pe1, peln, eta
+   real, dimension(km):: dz, s_fac, dlnp
+   real ztop, t0, dz0, sum1, tmp1
+   real ep, es, alpha, beta, gama, s_inc
+ 
+   integer  k
+ 
+      pe1(1) = ptop
+      peln(1) = log(pe1(1))
+      pe1(km+1) = p00
+      peln(km+1) = log(pe1(km+1))
+ 
+      t0 = 270.
+      ztop = rdgas/grav*t0*(peln(km+1) - peln(1))
+      
+      ! The following code has been adapated from subroutine levels in module module_initialize_real.F of WRF
+      s_fac(km)  = s0
+      s_inc = s0
+       do k=km-1, 1, -1
+          s_inc = stretch_fac_u+(stretch_fac_s-stretch_fac_u)*max((dzmax*0.5-s_inc)/(dzmax*0.5), 0.)
+          s_fac(k)  = s_fac(k+1) * s_inc
+       enddo
+ 
+       sum1 = 0.
+       do k=1,km
+          sum1 = sum1 + s_fac(k)
+       enddo
+ 
+       dz0 = ztop / sum1
+ 
+       do k=1,km
+          dz(k) = s_fac(k) * dz0
+       enddo
+ 
+       ze(km+1) = 0.
+       do k=km,1,-1
+          ze(k) = ze(k+1) + dz(k)
+       enddo
+ 
+ ! Re-scale dz with the stretched ztop
+       do k=1,km
+          dz(k) = dz(k) * (ztop/ze(1))
+       enddo
+ 
+       do k=km,1,-1
+          ze(k) = ze(k+1) + dz(k)
+       enddo
+ !     ze(1) = ztop
+ 
+       if ( is_master() ) then
+            write(*,*) 'var_gfs: computed model top (m)=', ztop*0.001, ' bottom/top dz=', dz(km), dz(1)
+ !          do k=1,km
+ !             write(*,*) k, s_fac(k)
+ !          enddo
+       endif
+
+       ! Given z --> p
+      do k=1,km
+         dz(k) = ze(k) - ze(k+1)
+       dlnp(k) = grav*dz(k) / (rdgas*t0)
+     enddo
+     do k=2,km
+        peln(k) = peln(k-1) + dlnp(k-1)
+         pe1(k) = exp(peln(k))
+     enddo
+
+! Pe(k) = ak(k) + bk(k) * PS
+! Locate pint and KS
+     ks = 0
+     do k=2,km
+        if ( pint < pe1(k)) then
+             ks = k-1
+             exit
+        endif
+     enddo
+     if ( is_master() ) then
+        write(*,*) 'For (input) PINT=', 0.01*pint, ' KS=', ks, 'pint(computed)=', 0.01*pe1(ks+1)
+        write(*,*) 'ptop =', ptop
+     endif
+     pint = pe1(ks+1)
+
+#ifdef NO_UKMO_HB
+     print*, "NO_UKMO_HB IS defined"
+     do k=1,ks+1
+        ak(k) = pe1(k)
+        bk(k) = 0.
+     enddo
+
+     do k=ks+2,km+1
+        bk(k) = (pe1(k) - pint) / (pe1(km+1)-pint)  ! bk == sigma
+        ak(k) =  pe1(k) - bk(k) * pe1(km+1)
+     enddo
+     bk(km+1) = 1.
+     ak(km+1) = 0.
+#else
+! Problematic for non-hydrostatic
+     print*, "NO_UKMO_HB not defined"
+     do k=1,km+1
+        eta(k) = pe1(k) / pe1(km+1)
+     enddo
+
+     ep =  eta(ks+1)
+     es =  eta(km)
+!     es =  1.
+     alpha = (ep**2-2.*ep*es) / (es-ep)**2
+     beta  = 2.*ep*es**2 / (es-ep)**2
+     gama = -(ep*es)**2 / (es-ep)**2
+
+! Pure pressure:
+     do k=1,ks+1
+        ak(k) = eta(k)*1.e5
+        bk(k) = 0.
+     enddo
+
+     do k=ks+2, km
+        ak(k) = alpha*eta(k) + beta + gama/eta(k)
+        ak(k) = ak(k)*1.e5
+     enddo
+        ak(km+1) = 0.
+
+     do k=ks+2, km
+        bk(k) = (pe1(k) - ak(k))/pe1(km+1)
+     enddo
+        bk(km+1) = 1.
+#endif
+
+     if ( is_master() ) then
+         write(*,*) 'KS=', ks, 'PINT (mb)=', pint/100.
+         do k=1,km
+            write(*,*) k, 0.5*(pe1(k)+pe1(k+1))/100., dz(k)
+         enddo
+         tmp1 = ak(ks+1)
+         do k=ks+1,km
+            tmp1 = max(tmp1, (ak(k)-ak(k+1))/max(1.E-5, (bk(k+1)-bk(k))) )
+         enddo
+         write(*,*) 'Hybrid Sigma-P: minimum allowable surface pressure (hpa)=', tmp1/100.
+     endif
+ end subroutine var_wrf
 
  subroutine var_hi(km, ak, bk, ptop, ks, pint, s_rate)
   integer, intent(in):: km

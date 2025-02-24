@@ -120,16 +120,35 @@ module fv_iau_mod
 #ifdef GFS_PHYS
   public IAU_initialize, getiauforcing
 
+  ! Specify whether to do interpolation of the input increments from Gaussian grid to cubed sphere 
+! logical :: iau_interp_g2c = .false.  ! Sofar added (11/5/24): default to true to be backwards compatible
+  ! 11/6/24: add iau_interp_g2c to IPD_Control inputs
+
 contains
-subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
+
+
+subroutine IAU_initialize (IPD_Control, IAU_Data, Init_parm)
+
+    ! STEVE: in the future, may want to change in io to use fms2 io supported operations like with aerosols from Linjiong:
+    ! From https://github.com/wavespotter/GFDL_atmos_cubed_sphere/blob/adb3417b37c93d23daf6679dac7288dd628a8d74/tools/external_aero.F90#L57C9-L61C40
+    ! used for reading tiled aerosol netcdf files
+!   use fms2_io_mod, only: FmsNetcdfDomainFile_t, open_file, close_file, &
+!                              register_restart_field, register_axis, &
+!                              read_restart, get_variable_dimension_names, &
+!                              get_dimension_size, close_file
+!   use fv_arrays_mod, only: fv_atmos_type
+!   type(FmsNetcdfDomainFile_t) :: aero_restart
+
+
     type (IPD_control_type), intent(in) :: IPD_Control
     type (IAU_external_data_type), intent(inout) :: IAU_Data
     type (IPD_init_type),    intent(in) :: Init_parm
-    ! local
 
+    ! ----------------------------------------------------------------------------
+    ! local
     character(len=128) :: fname
     real, dimension(:,:,:), allocatable:: u_inc, v_inc
-    real, allocatable:: lat(:), lon(:),agrid(:,:,:)
+    real, allocatable:: lat(:), lon(:), agrid(:,:,:)
     real(kind=kind_phys) sx,wx,wt,normfact,dtp
 
     integer:: i, j, k, nstep, kstep
@@ -139,6 +158,9 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
     logical:: found
     integer nfilesall
     integer, allocatable :: idt(:)
+
+    integer :: tile_num
+    ! ----------------------------------------------------------------------------
 
     is  = IPD_Control%isc
     ie  = is + IPD_Control%nx-1
@@ -151,98 +173,114 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
        call get_tracer_names(MODEL_ATMOS, i, tracer_names(i))
        tracer_indicies(i)  = get_tracer_index(MODEL_ATMOS,tracer_names(i))
     enddo
+
+    ! These hold the coefficients and indexes of the input Gaussian grid coordinates
+    ! NOTE: this is for doing interpolation.
     allocate(s2c(is:ie,js:je,4))
     allocate(id1(is:ie,js:je))
     allocate(id2(is:ie,js:je))
     allocate(jdc(is:ie,js:je))
     allocate(agrid(is:ie,js:je,2))
-! determine number of increment files to read, and the valid forecast hours
 
-   nfilesall = size(IPD_Control%iau_inc_files)
-   nfiles = 0
-   if (is_master()) print*,'in iau_init',trim(IPD_Control%iau_inc_files(1)),IPD_Control%iaufhrs(1)
-   do k=1,nfilesall
-      if (trim(IPD_Control%iau_inc_files(k)) .eq. '' .or. IPD_Control%iaufhrs(k) .lt. 0) exit
-      if (is_master()) then
-         print *,k,trim(adjustl(IPD_Control%iau_inc_files(k)))
-      endif
-      nfiles = nfiles + 1
-   enddo
-   if (is_master()) print *,'nfiles = ',nfiles
-   if (nfiles < 1) then
-      return
-   endif
-   if (nfiles > 1) then
-      allocate(idt(nfiles-1))
-      idt = IPD_Control%iaufhrs(2:nfiles)-IPD_Control%iaufhrs(1:nfiles-1)
-      do k=1,nfiles-1
-         if (idt(k) .ne. IPD_Control%iaufhrs(2)-IPD_Control%iaufhrs(1)) then
-           print *,'forecast intervals in iaufhrs must be constant'
-           call mpp_error (FATAL,' forecast intervals in iaufhrs must be constant')
-         endif
-      enddo
-      deallocate(idt)
-   endif
-   if (is_master()) print *,'iau interval = ',IPD_Control%iau_delthrs,' hours'
-   dt = (IPD_Control%iau_delthrs*3600.)
-   rdt = 1.0/dt
-
-!  set up interpolation weights to go from GSI's gaussian grid to cubed sphere
-    deg2rad = pi/180.
-
-    npz = IPD_Control%levs
-    fname = 'INPUT/'//trim(IPD_Control%iau_inc_files(1))
-
-    if( file_exists(fname) ) then
-      call open_ncfile( fname, ncid )        ! open the file
-      call get_ncdim1( ncid, 'lon',   im)
-      call get_ncdim1( ncid, 'lat',   jm)
-      call get_ncdim1( ncid, 'lev',   km)
-
-      if (km.ne.npz) then
-        if (is_master()) print *, 'km = ', km
-        call mpp_error(FATAL, &
-            '==> Error in IAU_initialize: km is not equal to npz')
-      endif
-
-      if(is_master())  write(*,*) fname, ' DA increment dimensions:', im,jm,km
-
-      allocate (  lon(im) )
-      allocate (  lat(jm) )
-
-      call _GET_VAR1 (ncid, 'lon', im, lon )
-      call _GET_VAR1 (ncid, 'lat', jm, lat )
-      call close_ncfile(ncid)
-
-      ! Convert to radians
-      do i=1,im
-        lon(i) = lon(i) * deg2rad
-      enddo
-      do j=1,jm
-        lat(j) = lat(j) * deg2rad
-      enddo
-
-    else
-      call mpp_error(FATAL,'==> Error in IAU_initialize: Expected file '&
-          //trim(fname)//' for DA increment does not exist')
+    ! ----------------------------------------------------------------------------
+    ! Support the 4D-IAU
+    ! determine number of increment files to read, and the valid forecast hours
+    ! This is for 4D-IAU, where there may be multiple files, one for each time step
+    ! ----------------------------------------------------------------------------
+    nfilesall = size(IPD_Control%iau_inc_files)
+    nfiles = 0
+    if (is_master()) print*,'in iau_init',trim(IPD_Control%iau_inc_files(1)),IPD_Control%iaufhrs(1)
+    do k=1,nfilesall
+       if (trim(IPD_Control%iau_inc_files(k)) .eq. '' .or. IPD_Control%iaufhrs(k) .lt. 0) exit
+       if (is_master()) then
+          print *,k,trim(adjustl(IPD_Control%iau_inc_files(k)))
+       endif
+       nfiles = nfiles + 1
+    enddo
+    if (is_master()) print *,'nfiles = ',nfiles
+    if (nfiles < 1) then
+       return
     endif
+    if (nfiles > 1) then
+       allocate(idt(nfiles-1))
+       idt = IPD_Control%iaufhrs(2:nfiles)-IPD_Control%iaufhrs(1:nfiles-1)
+       do k=1,nfiles-1
+          if (idt(k) .ne. IPD_Control%iaufhrs(2)-IPD_Control%iaufhrs(1)) then
+            print *,'forecast intervals in iaufhrs must be constant'
+            call mpp_error (FATAL,' forecast intervals in iaufhrs must be constant')
+          endif
+       enddo
+       deallocate(idt)
+    endif
+    if (is_master()) print *,'iau interval = ',IPD_Control%iau_delthrs,' hours'
+    dt = (IPD_Control%iau_delthrs*3600.)
+    rdt = 1.0/dt
+
+    ! ----------------------------------------------------------------------------
+    !  set up interpolation weights to go from GSI's Gaussian grid to cubed sphere
+    ! ----------------------------------------------------------------------------
+    if (IPD_Control%iau_interp_g2c) then
+        deg2rad = pi/180.
+
+        npz = IPD_Control%levs
+        fname = 'INPUT/'//trim(IPD_Control%iau_inc_files(1))
+
+        if( file_exists(fname) ) then
+          call open_ncfile( fname, ncid )        ! open the file
+          call get_ncdim1( ncid, 'lon',   im)
+          call get_ncdim1( ncid, 'lat',   jm)
+          call get_ncdim1( ncid, 'lev',   km)
+
+          if (km.ne.npz) then
+            if (is_master()) print *, 'km = ', km
+            call mpp_error(FATAL, &
+                '==> Error in IAU_initialize: km is not equal to npz')
+          endif
+
+          if(is_master())  write(*,*) fname, ' DA increment dimensions:', im,jm,km
+
+          allocate (  lon(im) )
+          allocate (  lat(jm) )
+
+          call _GET_VAR1 (ncid, 'lon', im, lon )
+          call _GET_VAR1 (ncid, 'lat', jm, lat )
+          call close_ncfile(ncid)
+
+          ! Convert to radians
+          do i=1,im
+            lon(i) = lon(i) * deg2rad
+          enddo
+          do j=1,jm
+            lat(j) = lat(j) * deg2rad
+          enddo
+
+        else
+          call mpp_error(FATAL,'==> Error in IAU_initialize: Expected file '&
+              //trim(fname)//' for DA increment does not exist')
+        endif
 
     ! Initialize lat-lon to Cubed bi-linear interpolation coeff:
     ! populate agrid
-!    print*,'is,ie,js,je=',is,ie,js,ie
-!    print*,'size xlon=',size(Init_parm%xlon(:,1)),size(Init_parm%xlon(1,:))
-!    print*,'size agrid=',size(agrid(:,1,1)),size(agrid(1,:,1)),size(agrid(1,1,:))
-    do j = 1,size(Init_parm%xlon,2)
-      do i = 1,size(Init_parm%xlon,1)
-!         print*,i,j,is-1+j,js-1+j
-         agrid(is-1+i,js-1+j,1)=Init_parm%xlon(i,j)
-         agrid(is-1+i,js-1+j,2)=Init_parm%xlat(i,j)
-      enddo
-    enddo
-    call remap_coef( is, ie, js, je, is, ie, js, je, &
-        im, jm, lon, lat, id1, id2, jdc, s2c, &
-        agrid)
-    deallocate ( lon, lat,agrid )
+!        print*,'is,ie,js,je=',is,ie,js,ie
+!        print*,'size xlon=',size(Init_parm%xlon(:,1)),size(Init_parm%xlon(1,:))
+!        print*,'size agrid=',size(agrid(:,1,1)),size(agrid(1,:,1)),size(agrid(1,1,:))
+        do j = 1,size(Init_parm%xlon,2)
+          do i = 1,size(Init_parm%xlon,1)
+!             print*,i,j,is-1+j,js-1+j
+             agrid(is-1+i,js-1+j,1)=Init_parm%xlon(i,j)
+             agrid(is-1+i,js-1+j,2)=Init_parm%xlat(i,j)
+          enddo
+        enddo
+        call remap_coef( is, ie, js, je, is, ie, js, je, &
+            im, jm, lon, lat, id1, id2, jdc, s2c, &
+            agrid)
+        deallocate ( lon, lat, agrid )
+
+    endif
+
+    ! ----------------------------------------------------------------------------
+    ! Allocate space for 2 steps of the increments, which can be interpolated in time
+    ! ----------------------------------------------------------------------------
 
     allocate(IAU_Data%ua_inc(is:ie, js:je, km))
     allocate(IAU_Data%va_inc(is:ie, js:je, km))
@@ -250,7 +288,8 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
     allocate(IAU_Data%delp_inc(is:ie, js:je, km))
     allocate(IAU_Data%delz_inc(is:ie, js:je, km))
     allocate(IAU_Data%tracer_inc(is:ie, js:je, km,ntracers))
-! allocate arrays that will hold iau state
+
+    ! allocate arrays that will hold iau state #1 read in from file
     allocate (iau_state%inc1%ua_inc(is:ie, js:je, km))
     allocate (iau_state%inc1%va_inc(is:ie, js:je, km))
     allocate (iau_state%inc1%temp_inc (is:ie, js:je, km))
@@ -281,12 +320,20 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
        enddo
        iau_state%wt_normfact = (2*nstep+1)/normfact
     endif
-    call read_iau_forcing(IPD_Control,iau_state%inc1,'INPUT/'//trim(IPD_Control%iau_inc_files(1)))
-    if (nfiles.EQ.1) then  ! only need to get incrments once since constant forcing over window
-       call setiauforcing(IPD_Control,IAU_Data,iau_state%wt)
+
+    ! ----------------------------------------------------------------------------
+    ! Read the first two IAU file(s)
+    ! ----------------------------------------------------------------------------
+    if (IPD_Control%iau_interp_g2c) then
+        call read_iau_forcing(IPD_Control,iau_state%inc1,'INPUT/'//trim(IPD_Control%iau_inc_files(1)))
+    else
+        call read_iau_tiles(IPD_Control,iau_state%inc1,'INPUT/'//trim(IPD_Control%iau_inc_files(1)))
     endif
 
-    if (nfiles.GT.1) then  !have multiple files, but only read in 2 at a time and interpoalte between them
+    if (nfiles.EQ.1) then  ! only need to get increments once since constant forcing over window
+       call setiauforcing(IPD_Control,IAU_Data,iau_state%wt)
+    elseif (nfiles.GT.1) then  !have multiple files, but only read in 2 at a time and interpolate between them
+      ! allocate arrays that will hold iau state #2 read in from file
        allocate (iau_state%inc2%ua_inc(is:ie, js:je, km))
        allocate (iau_state%inc2%va_inc(is:ie, js:je, km))
        allocate (iau_state%inc2%temp_inc (is:ie, js:je, km))
@@ -294,12 +341,18 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
        allocate (iau_state%inc2%delz_inc (is:ie, js:je, km))
        allocate (iau_state%inc2%tracer_inc(is:ie, js:je, km,ntracers))
        iau_state%hr2=IPD_Control%iaufhrs(2)
-       call read_iau_forcing(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(2)))
+
+       if (IPD_Control%iau_interp_g2c) then
+           call read_iau_forcing(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(2)))
+       else
+           call read_iau_tiles(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(2)))
+       endif
     endif
 !   print*,'in IAU init',dt,rdt
     IAU_data%drymassfixer = IPD_control%iau_drymassfixer
 
 end subroutine IAU_initialize
+
 
 subroutine getiauforcing(IPD_Control,IAU_Data)
 
@@ -358,9 +411,8 @@ subroutine getiauforcing(IPD_Control,IAU_Data)
          IAU_Data%in_interval=.true.
       endif
       return
-   endif
 
-   if (nfiles > 1) then
+   elseif (nfiles > 1) then
       itnext=2
       if (IPD_Control%fhour < t1 .or. IPD_Control%fhour >= t2) then
 !         if (is_master()) print *,'no iau forcing',IPD_Control%iaufhrs(1),IPD_Control%fhour,IPD_Control%iaufhrs(nfiles)
@@ -379,15 +431,22 @@ subroutine getiauforcing(IPD_Control,IAU_Data)
             iau_state%hr2=IPD_Control%iaufhrs(itnext)
             iau_state%inc1=iau_state%inc2
             if (is_master()) print *,'reading next increment file',trim(IPD_Control%iau_inc_files(itnext))
-            call read_iau_forcing(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(itnext)))
+            if (IPD_Control%iau_interp_g2c) then
+                call read_iau_forcing(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(itnext)))
+            else
+                call read_iau_tiles(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(itnext)))
+            endif
          endif
          call updateiauforcing(IPD_Control,IAU_Data,iau_state%wt)
       endif
    endif
    sphum=get_tracer_index(MODEL_ATMOS,'sphum')
- end subroutine getiauforcing
+end subroutine getiauforcing
+
 
 subroutine updateiauforcing(IPD_Control,IAU_Data,wt)
+
+   ! This interpolates the IAU increment over time to apply at the current model time.
 
    implicit none
    type (IPD_control_type),        intent(in) :: IPD_Control
@@ -400,51 +459,60 @@ subroutine updateiauforcing(IPD_Control,IAU_Data,wt)
    do j = js,je
       do i = is,ie
          do k = 1,npz
-            IAU_Data%ua_inc(i,j,k)    =(delt*IAU_state%inc1%ua_inc(i,j,k)    + (1.-delt)* IAU_state%inc2%ua_inc(i,j,k))*rdt*wt
-            IAU_Data%va_inc(i,j,k)    =(delt*IAU_state%inc1%va_inc(i,j,k)    + (1.-delt)* IAU_state%inc2%va_inc(i,j,k))*rdt*wt
-            IAU_Data%temp_inc(i,j,k)  =(delt*IAU_state%inc1%temp_inc(i,j,k)  + (1.-delt)* IAU_state%inc2%temp_inc(i,j,k))*rdt*wt
-            IAU_Data%delp_inc(i,j,k)  =(delt*IAU_state%inc1%delp_inc(i,j,k)  + (1.-delt)* IAU_state%inc2%delp_inc(i,j,k))*rdt*wt
-            IAU_Data%delz_inc(i,j,k)  =(delt*IAU_state%inc1%delz_inc(i,j,k)  + (1.-delt)* IAU_state%inc2%delz_inc(i,j,k))*rdt*wt
+            IAU_Data%ua_inc(i,j,k)    = (delt*IAU_state%inc1%ua_inc(i,j,k)    + (1.-delt)* IAU_state%inc2%ua_inc(i,j,k))*rdt*wt
+            IAU_Data%va_inc(i,j,k)    = (delt*IAU_state%inc1%va_inc(i,j,k)    + (1.-delt)* IAU_state%inc2%va_inc(i,j,k))*rdt*wt
+            IAU_Data%temp_inc(i,j,k)  = (delt*IAU_state%inc1%temp_inc(i,j,k)  + (1.-delt)* IAU_state%inc2%temp_inc(i,j,k))*rdt*wt
+            IAU_Data%delp_inc(i,j,k)  = (delt*IAU_state%inc1%delp_inc(i,j,k)  + (1.-delt)* IAU_state%inc2%delp_inc(i,j,k))*rdt*wt
+            IAU_Data%delz_inc(i,j,k)  = (delt*IAU_state%inc1%delz_inc(i,j,k)  + (1.-delt)* IAU_state%inc2%delz_inc(i,j,k))*rdt*wt
             do l=1,ntracers
-               IAU_Data%tracer_inc(i,j,k,l) =(delt*IAU_state%inc1%tracer_inc(i,j,k,l) + (1.-delt)* IAU_state%inc2%tracer_inc(i,j,k,l))*rdt*wt
+               IAU_Data%tracer_inc(i,j,k,l) = (delt*IAU_state%inc1%tracer_inc(i,j,k,l) + (1.-delt)* IAU_state%inc2%tracer_inc(i,j,k,l))*rdt*wt
             enddo
          enddo
-       enddo
+      enddo
    enddo
- end subroutine updateiauforcing
+end subroutine updateiauforcing
 
 
- subroutine setiauforcing(IPD_Control,IAU_Data,wt)
+subroutine setiauforcing(IPD_Control, IAU_Data, wt)
 
- implicit none
- type (IPD_control_type),        intent(in) :: IPD_Control
- type(IAU_external_data_type),  intent(inout) :: IAU_Data
- real(kind_phys) delt, dt,wt
- integer i,j,k,l,sphum
-!  this is only called if using 1 increment file
- if (is_master()) print *,'in setiauforcing',rdt
- do j = js,je
-    do i = is,ie
-       do k = 1,npz
-          IAU_Data%ua_inc(i,j,k)    =wt*IAU_state%inc1%ua_inc(i,j,k)*rdt
-          IAU_Data%va_inc(i,j,k)    =wt*IAU_state%inc1%va_inc(i,j,k)*rdt
-          IAU_Data%temp_inc(i,j,k)  =wt*IAU_state%inc1%temp_inc(i,j,k)*rdt
-          IAU_Data%delp_inc(i,j,k) =wt*IAU_state%inc1%delp_inc(i,j,k)*rdt
-          IAU_Data%delz_inc(i,j,k) =wt*IAU_state%inc1%delz_inc(i,j,k)*rdt
-          do l = 1,ntracers
-             IAU_Data%tracer_inc(i,j,k,l) =wt*IAU_state%inc1%tracer_inc(i,j,k,l)*rdt
-          enddo
-       enddo
+    ! This sets the IAU increment into the IAU_Data structure for application in the model integration
+
+    implicit none
+    type (IPD_control_type),          intent(in) :: IPD_Control
+    type(IAU_external_data_type),  intent(inout) :: IAU_Data
+    real(kind_phys) delt, dt,wt
+    integer i,j,k,l,sphum
+!   this is only called if using 1 increment file
+    if (is_master()) print *,'in setiauforcing',rdt
+    do j = js,je
+        do i = is,ie
+            do k = 1,npz
+                IAU_Data%ua_inc(i,j,k)    = wt*IAU_state%inc1%ua_inc(i,j,k)*rdt
+                IAU_Data%va_inc(i,j,k)    = wt*IAU_state%inc1%va_inc(i,j,k)*rdt
+                IAU_Data%temp_inc(i,j,k)  = wt*IAU_state%inc1%temp_inc(i,j,k)*rdt
+                IAU_Data%delp_inc(i,j,k)  = wt*IAU_state%inc1%delp_inc(i,j,k)*rdt
+                IAU_Data%delz_inc(i,j,k)  = wt*IAU_state%inc1%delz_inc(i,j,k)*rdt
+                do l = 1,ntracers
+                    IAU_Data%tracer_inc(i,j,k,l) = wt*IAU_state%inc1%tracer_inc(i,j,k,l)*rdt
+                enddo
+            enddo
+        enddo
     enddo
- enddo
- sphum=get_tracer_index(MODEL_ATMOS,'sphum')
- end subroutine setiauforcing
+ 
+    !STEVE: is there a purpose for this?
+    sphum=get_tracer_index(MODEL_ATMOS,'sphum')
+end subroutine setiauforcing
+
 
 subroutine read_iau_forcing(IPD_Control,increments,fname)
+
+    ! This reads the IAU increment from a netcdf file, interpolates from Gaussian to Cubed-sphere grid, and stores it into memory
+
     type (IPD_control_type), intent(in) :: IPD_Control
     type(iau_internal_data_type), intent(inout):: increments
     character(len=*),  intent(in) :: fname
-!locals
+
+    !locals
     real, dimension(:,:,:), allocatable:: u_inc, v_inc
 
     integer:: i, j, k, l, npz
@@ -498,9 +566,147 @@ subroutine read_iau_forcing(IPD_Control,increments,fname)
 
 end subroutine read_iau_forcing
 
+
+! Sofar added (11/5/24) - read tiled files on native model (restart) grid
+subroutine read_iau_tiles(IPD_Control,increments,infile)
+
+    type (IPD_control_type), intent(in) :: IPD_Control
+    type(iau_internal_data_type), intent(inout):: increments
+    character(len=*),  intent(in) :: infile
+
+    integer :: is,  ie,  js,  je
+    integer :: tile_num
+    logical :: Fv_inc_tile_is_open = .true.
+    character(256) :: fname, field_name
+    character(16) :: format_string
+    integer :: i, l, length, ierr
+
+    ! Read in the increment tile
+    ! Note: https://github.com/NOAA-GFDL/FMS/blob/7a73eaa7aa76b5f8336a7bebe55c669b3375aab2/fms2_io/fms_io_utils.F90#L804
+    tile_num = IPD_Control%tile_num
+
+!   fname = trim(infile)
+!   i = scan(trim(infile),".", BACK=.true.)
+!   write (fname,format_string) infile(1:i-1), tile_num, '.nc' 
+
+    length = len_trim(infile)
+    fname = infile(1:length)
+
+    !< If .tileXX is in the filename add the appendix before it
+    if (has_domain_tile_string(infile)) then
+        i = index(trim(infile), ".tile", back=.true.)
+!       name_out = name_in(1:i-1)    //'.'//trim(filename_appendix)//name_in(i:length)
+        format_string = "(2A,I1,A)"
+        write (fname,format_string) infile(1:i-1), '.', tile_num, infile(i:length)
+    endif
+
+    !< If .nc is in the filename add the appendix before it
+    i = index(trim(infile), ".nc", back=.true.)
+    if ( i .ne. 0 ) then
+!       name_out = name_in(1:i-1)//'.'//trim(filename_appendix)//name_in(i:length)
+        format_string = "(2A,I1,A)"
+        write (fname,format_string) infile(1:i-1), '.', tile_num, infile(i:length)
+    endif
+
+    print *, 'read_iau_tiles:: reading tile increment file:', trim(fname)
+
+    is  = IPD_Control%isc
+    ie  = is + IPD_Control%nx-1
+    js  = IPD_Control%jsc
+    je  = js + IPD_Control%ny-1
+    npz = IPD_Control%levs
+
+
+    if( file_exists(fname) ) then
+        call open_ncfile( fname, ncid )        ! open the file
+    else
+    call mpp_error(FATAL,'==> Error in read_iau_tiles: Expected file '&
+        //trim(fname)//' for DA increment does not exist')
+    endif
+
+      
+    ! ---------------------------------
+    ! Read into data structure here
+    ! ---------------------------------
+
+    ! Get temperature increment
+    field_name = 'T_inc'
+    call check_var_exists(ncid, field_name, ierr)
+    if (ierr == 0) then
+        call get_var3_r4( ncid, field_name, is,ie, js,je, 1,km, wk3 )
+        increments%temp_inc(is:ie,js:je,:) = wk3(is:ie,js:je,:)
+    else
+        if (is_master()) print *,'warning: no increment for ',trim(field_name),' found, assuming zero'
+        wk3 = 0.
+    endif
+
+    ! Get pressure delta increment
+    field_name = 'delp_inc'
+    call check_var_exists(ncid, field_name, ierr)
+    if (ierr == 0) then
+        call get_var3_r4( ncid, field_name, is,ie, js,je, 1,km, wk3 )
+        increments%delp_inc(is:ie,js:je,:) = wk3(is:ie,js:je,:)
+    else
+        if (is_master()) print *,'warning: no increment for ',trim(field_name),' found, assuming zero'
+        wk3 = 0.
+    endif
+
+    ! Get height delta increment
+    field_name = 'delz_inc'
+    call check_var_exists(ncid, field_name, ierr)
+    if (ierr == 0) then
+        call get_var3_r4( ncid, field_name, is,ie, js,je, 1,km, wk3 )
+        increments%delz_inc(is:ie,js:je,:) = wk3(is:ie,js:je,:)
+    else
+        if (is_master()) print *,'warning: no increment for ',trim(field_name),' found, assuming zero'
+        wk3 = 0.
+    endif
+
+    ! Get height delta increment
+    field_name = 'u_inc'
+    call check_var_exists(ncid, field_name, ierr)
+    if (ierr == 0) then
+        call get_var3_r4( ncid, field_name, is,ie, js,je, 1,km, wk3 )
+        increments%ua_inc(is:ie,js:je,:) = wk3(is:ie,js:je,:)
+    else
+        if (is_master()) print *,'warning: no increment for ',trim(field_name),' found, assuming zero'
+        wk3 = 0.
+    endif
+
+    ! Get height delta increment
+    field_name = 'v_inc'
+    call check_var_exists(ncid, field_name, ierr)
+    if (ierr == 0) then
+        call get_var3_r4( ncid, field_name, is,ie, js,je, 1,km, wk3 )
+        increments%va_inc(is:ie,js:je,:) = wk3(is:ie,js:je,:)
+    else
+        if (is_master()) print *,'warning: no increment for ',trim(field_name),' found, assuming zero'
+        wk3 = 0.
+    endif
+
+    ! Get tracer increments
+    do l=1,ntracers
+        field_name = trim(tracer_names(l))//'_inc'
+        call check_var_exists(ncid, field_name, ierr)
+        if (ierr == 0) then
+            call get_var3_r4( ncid, field_name, is,ie, js,je, 1,km, wk3 )
+            increments%tracer_inc(is:ie,js:je,:,l) = wk3(is:ie,js:je,:)
+        else
+            if (is_master()) print *,'warning: no increment for ',trim(field_name),' found, assuming zero'
+            wk3 = 0.
+        endif
+    enddo
+
+    call close_ncfile(ncid)
+
+end subroutine read_iau_tiles
+
+
 subroutine interp_inc(field_name,var,jbeg,jend)
-! interpolate increment from GSI gaussian grid to cubed sphere
-! everying is on the A-grid, earth relative
+
+ ! interpolate increment from GSI gaussian grid to cubed sphere
+ ! everying is on the A-grid, Earth relative
+ 
  character(len=*), intent(in) :: field_name
  real, dimension(is:ie,js:je,1:km), intent(inout) :: var
  integer, intent(in) :: jbeg,jend
@@ -526,6 +732,40 @@ subroutine interp_inc(field_name,var,jbeg,jend)
 end subroutine interp_inc
 
 #endif
+
+
+!> @brief Determine if the "domain tile string" (.tilex.) exists in the input filename.
+!! @internal function from FMS: https://github.com/NOAA-GFDL/FMS/blob/644cbd3d5d78a76a2d53604730b4cc042727bdaa/fms2_io/fms_io_utils.F90#L308
+function has_domain_tile_string(string) &
+  result(has_string)
+
+  character(len=*), intent(in) :: string !< Input string.
+  logical :: has_string
+
+  integer :: l
+  integer :: i, j
+
+  has_string = .false.
+! Assigns i to the index where ".tile" starts
+  i = index(trim(string), ".tile", back=.true.)
+  if (i .ne. 0) then
+    l = len_trim(string)
+! Sets i to the index after .tile
+    i = i + 5
+    j = i
+    do while (i .le. l)
+! If the ith characters is a dot but i not equal to the index after .tile set has_string to true
+      if (verify(string(i:i), ".") .eq. 0 .and. j .ne. i) then
+        has_string = .true.
+        exit
+! If the ith characters is NOT a number exit function and has_string will stay as false
+      elseif (verify(string(i:i), "0123456789") .ne. 0) then
+        exit
+      endif
+      i = i + 1
+    enddo
+  endif
+end function has_domain_tile_string
 
 end module fv_iau_mod
 

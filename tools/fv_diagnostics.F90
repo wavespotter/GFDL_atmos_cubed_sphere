@@ -906,8 +906,11 @@ contains
 !-------------------
 ! Sea-level-pressure
 !-------------------
-       id_slp = register_diag_field (trim(field), 'slp', axes(1:2),  Time,   &
+       id_slp = register_diag_field (trim(field), 'slp_hPa', axes(1:2),  Time,   &
                                      'sea-level pressure', 'mb', missing_value=missing_value,  &
+                                      range=slprange )
+       id_slp_pa = register_diag_field (trim(field), 'slp_Pa', axes(1:2),  Time,   &
+                                     'sea-level pressure', 'Pa', missing_value=missing_value,  &
                                       range=slprange )
 !----------------------------------
 ! Bottom level pressure for masking
@@ -1541,7 +1544,7 @@ contains
 
     real, allocatable :: a2(:,:),a3(:,:,:),a4(:,:,:), wk(:,:,:), wz(:,:,:), ucoor(:,:,:), vcoor(:,:,:)
     real, allocatable :: ustm(:,:), vstm(:,:)
-    real, allocatable :: slp(:,:), depress(:,:), ws_max(:,:), tc_count(:,:)
+    real, allocatable :: slp(:,:), slp_pa(:,:), depress(:,:), ws_max(:,:), tc_count(:,:)
     real, allocatable :: u2(:,:), v2(:,:), x850(:,:), var1(:,:), var2(:,:), var3(:,:)
     real, allocatable :: dmmr(:,:,:), dvmr(:,:,:)
     real height(2)
@@ -2290,7 +2293,7 @@ contains
 
 
 
-       if( id_slp>0 .or. id_tm>0 .or. id_any_hght>0 .or. id_hght3d>0 .or. id_c15>0 .or. id_ctz>0 ) then
+       if( id_slp>0 .or. id_slp_pa>0 .or. id_tm>0 .or. id_any_hght>0 .or. id_hght3d>0 .or. id_c15>0 .or. id_ctz>0 ) then
 
           allocate ( wz(isc:iec,jsc:jec,npz+1) )
           call get_height_field(isc, iec, jsc, jec, ngc, npz, Atm(n)%flagstruct%hydrostatic, Atm(n)%delz,  &
@@ -2302,35 +2305,42 @@ contains
              used = send_data(id_hght3d, 0.5*(wz(isc:iec,jsc:jec,1:npz)+wz(isc:iec,jsc:jec,2:npz+1)), Time)
           endif
 
+          if (id_slp_pa > 0) then
+            allocate ( slp_pa(isc:iec,jsc:jec) )
+            call get_pressure_given_height(isc, iec, jsc, jec, ngc, npz, wz, 1, height(2),   &
+                                        Atm(n)%pt(:,:,npz), Atm(n)%peln, slp_pa, 1.0)
+            used = send_data (id_slp_pa, slp_pa, Time)
+          end if
+
           if(id_slp > 0) then
 ! Cumpute SLP (pressure at height=0)
-          allocate ( slp(isc:iec,jsc:jec) )
-          call get_pressure_given_height(isc, iec, jsc, jec, ngc, npz, wz, 1, height(2),   &
+            allocate ( slp(isc:iec,jsc:jec) )
+            call get_pressure_given_height(isc, iec, jsc, jec, ngc, npz, wz, 1, height(2),   &
                                         Atm(n)%pt(:,:,npz), Atm(n)%peln, slp, 0.01)
 
-          if ( Atm(n)%flagstruct%range_warn ) then
-             call range_check('SLP', slp, isc, iec, jsc, jec, 0, Atm(n)%gridstruct%agrid,    &
+            if ( Atm(n)%flagstruct%range_warn ) then
+               call range_check('SLP', slp, isc, iec, jsc, jec, 0, Atm(n)%gridstruct%agrid,    &
                   slprange(1), slprange(2), bad_range, Time)
-          endif
-          used = send_data (id_slp, slp, Time)
-             if( prt_minmax ) then
-                call prt_mxm('SLP (Pa): ', slp, isc, iec, jsc, jec, 0, 1, 1., Atm(n)%gridstruct%area_64, Atm(n)%domain)
-                call prt_maxmin('SLP', slp, isc, iec, jsc, jec, 0, 1, 1.)
-                if ( .not. Atm(n)%gridstruct%bounded_domain ) then
+            endif
+            used = send_data (id_slp, slp, Time)
+               if( prt_minmax ) then
+                  call prt_mxm('SLP (Pa): ', slp, isc, iec, jsc, jec, 0, 1, 1., Atm(n)%gridstruct%area_64, Atm(n)%domain)
+                  call prt_maxmin('SLP', slp, isc, iec, jsc, jec, 0, 1, 1.)
+                  if ( .not. Atm(n)%gridstruct%bounded_domain ) then
 ! US Potential Landfall TCs (PLT):
-                 do j=jsc,jec
-                    do i=isc,iec
-                       a2(i,j) = 1015.
-                       slon = rad2deg*Atm(n)%gridstruct%agrid(i,j,1)
-                       slat = rad2deg*Atm(n)%gridstruct%agrid(i,j,2)
-                       if ( slat>15. .and. slat<40. .and. slon>270. .and. slon<290. ) then
+                     do j=jsc,jec
+                     do i=isc,iec
+                        a2(i,j) = 1015.
+                        slon = rad2deg*Atm(n)%gridstruct%agrid(i,j,1)
+                        slat = rad2deg*Atm(n)%gridstruct%agrid(i,j,2)
+                        if ( slat>15. .and. slat<40. .and. slon>270. .and. slon<290. ) then
                             a2(i,j) = slp(i,j)
-                       endif
-                    enddo
-                 enddo
-                 call prt_mxm('SLP_ATL (Pa): ', a2, isc, iec, jsc, jec, 0,   1, 1., Atm(n)%gridstruct%area_64, Atm(n)%domain)
-                endif
-             endif
+                        endif
+                     enddo
+                     enddo
+                     call prt_mxm('SLP_ATL (Pa): ', a2, isc, iec, jsc, jec, 0,   1, 1., Atm(n)%gridstruct%area_64, Atm(n)%domain)
+                  endif
+               endif
           endif
 
 ! Compute H3000 and/or H500
@@ -2516,6 +2526,7 @@ contains
             endif
 
             if(id_slp>0 )  deallocate( slp )
+            if(id_slp_pa>0 )  deallocate( slp_pa )
 
            deallocate( a3 ) !needed because a3 may need to be re-allocated later with a different number of vertical levels
         endif

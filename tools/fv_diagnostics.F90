@@ -120,7 +120,7 @@ module fv_diagnostics_mod
  integer :: yr_init, mo_init, dy_init, hr_init, mn_init, sec_init
  integer :: id_dx, id_dy
 
- real              :: vrange(2), vsrange(2), wrange(2), trange(2), slprange(2), rhrange(2), psrange(2), skrange(2)
+ real              :: vrange(2), vsrange(2), wrange(2), trange(2), slprange(2), slprangePa(2), rhrange(2), psrange(2), skrange(2)
 
  ! integer :: id_d_grid_ucomp, id_d_grid_vcomp   ! D grid winds
  ! integer :: id_c_grid_ucomp, id_c_grid_vcomp   ! C grid winds
@@ -215,6 +215,7 @@ contains
     trange = (/  100.,  350. /)  ! temperature
 #endif
     slprange = (/800.,  1200./)  ! sea-level-pressure
+    slprangePa = (/  80000.,  120000. /)  ! sea-level-pressure (Pa)
     skrange  = (/ -10000000.0,  10000000.0 /)  ! dissipation estimate for SKEB
 #ifdef SW_DYNAMICS
     psrange = (/.01, 1.e7 /)
@@ -911,7 +912,7 @@ contains
                                       range=slprange )
        id_slp_pa = register_diag_field (trim(field), 'slp_Pa', axes(1:2),  Time,   &
                                      'sea-level pressure', 'Pa', missing_value=missing_value,  &
-                                      range=slprange )
+                                      range=slprangePa )
 !----------------------------------
 ! Bottom level pressure for masking
 !----------------------------------

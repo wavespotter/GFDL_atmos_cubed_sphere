@@ -37,9 +37,19 @@
 
 module fv_iau_mod
 
-  use fms2_io_mod,         only: file_exists
-  use mpp_mod,             only: mpp_error, FATAL, NOTE, mpp_pe
-  use mpp_domains_mod,     only: domain2d
+  use fms2_io_mod,         only: file_exists,          &
+                                 FmsNetcdfDomainFile_t,&
+                                 FmsNetcdfFile_t,      &
+                                 close_file,           &
+                                 open_file,            &
+                                 read_data
+  use mpp_mod,             only: mpp_error,           &
+                                 FATAL,               &
+                                 NOTE,                &
+                                 mpp_pe,              &
+                                 mpp_npes,            &
+                                 mpp_get_current_pelist
+  use mpp_domains_mod,     only: domain2d, mpp_get_ntile_count
 
   use constants_mod,       only: pi=>pi_8
   use fv_arrays_mod,       only: fv_atmos_type,       &
@@ -81,6 +91,8 @@ module fv_iau_mod
   integer :: npz,ntracers
   character(len=32), allocatable :: tracer_names(:)
   integer, allocatable :: tracer_indicies(:)
+  real, allocatable :: ak(:), bk(:)
+  type(domain2d) :: fv_domain
 
   real(kind=4), allocatable:: wk3(:,:,:)
   type iau_internal_data_type
@@ -117,10 +129,12 @@ module fv_iau_mod
   public IAU_initialize, getiauforcing
 
 contains
-subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
+subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm, domain_read, ak_in, bk_in)
     type (IPD_control_type), intent(in) :: IPD_Control
     type (IAU_external_data_type), intent(inout) :: IAU_Data
     type (IPD_init_type),    intent(in) :: Init_parm
+    type(domain2d), intent(in) :: domain_read
+    real, intent(in) :: ak_in(:), bk_in(:)
     ! local
 
     character(len=128) :: fname
@@ -136,6 +150,8 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
     integer nfilesall
     integer, allocatable :: idt(:)
 
+    fv_domain = domain_read
+
     is  = IPD_Control%isc
     ie  = is + IPD_Control%nx-1
     js  = IPD_Control%jsc
@@ -147,11 +163,7 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
        call get_tracer_names(MODEL_ATMOS, i, tracer_names(i))
        tracer_indicies(i)  = get_tracer_index(MODEL_ATMOS,tracer_names(i))
     enddo
-    allocate(s2c(is:ie,js:je,4))
-    allocate(id1(is:ie,js:je))
-    allocate(id2(is:ie,js:je))
-    allocate(jdc(is:ie,js:je))
-    allocate(agrid(is:ie,js:je,2))
+  
 ! determine number of increment files to read, and the valid forecast hours
 
    nfilesall = size(IPD_Control%iau_inc_files)
@@ -183,76 +195,88 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
    dt = (IPD_Control%iau_delthrs*3600.)
    rdt = 1.0/dt
 
-!  set up interpolation weights to go from GSI's gaussian grid to cubed sphere
-    deg2rad = pi/180.
+   npz = IPD_Control%levs
 
-    npz = IPD_Control%levs
-    fname = 'INPUT/'//trim(IPD_Control%iau_inc_files(1))
+   allocate(ak(npz+1), bk(npz+1))
+   ak = ak_in(1:npz+1)
+   bk = bk_in(1:npz+1)
 
-    if( file_exists(fname) ) then
-      call open_ncfile( fname, ncid )        ! open the file
-      call get_ncdim1( ncid, 'lon',   im)
-      call get_ncdim1( ncid, 'lat',   jm)
-      call get_ncdim1( ncid, 'lev',   km)
+   if (.not.IPD_Control%iau_on_cubed_sphere) then
+   !  set up interpolation weights to go from GSI's gaussian grid to cubed sphere
+      deg2rad = pi/180.
 
-      if (km.ne.npz) then
-        if (is_master()) print *, 'km = ', km
-        call mpp_error(FATAL, &
-            '==> Error in IAU_initialize: km is not equal to npz')
+      fname = 'INPUT/'//trim(IPD_Control%iau_inc_files(1))
+
+      if( file_exists(fname) ) then
+         call open_ncfile( fname, ncid )        ! open the file
+         call get_ncdim1( ncid, 'lon',   im)
+         call get_ncdim1( ncid, 'lat',   jm)
+         call get_ncdim1( ncid, 'lev',   km)
+
+         if (km.ne.npz) then
+         if (is_master()) print *, 'km = ', km
+         call mpp_error(FATAL, &
+               '==> Error in IAU_initialize: km is not equal to npz')
+         endif
+
+         if(is_master())  write(*,*) fname, ' DA increment dimensions:', im,jm,km
+
+         allocate (  lon(im) )
+         allocate (  lat(jm) )
+
+         call _GET_VAR1 (ncid, 'lon', im, lon )
+         call _GET_VAR1 (ncid, 'lat', jm, lat )
+         call close_ncfile(ncid)
+
+         ! Convert to radians
+         do i=1,im
+            lon(i) = lon(i) * deg2rad
+         enddo
+         do j=1,jm
+            lat(j) = lat(j) * deg2rad
+         enddo
+
+      else
+         call mpp_error(FATAL,'==> Error in IAU_initialize: Expected file '&
+            //trim(fname)//' for DA increment does not exist')
       endif
 
-      if(is_master())  write(*,*) fname, ' DA increment dimensions:', im,jm,km
-
-      allocate (  lon(im) )
-      allocate (  lat(jm) )
-
-      call _GET_VAR1 (ncid, 'lon', im, lon )
-      call _GET_VAR1 (ncid, 'lat', jm, lat )
-      call close_ncfile(ncid)
-
-      ! Convert to radians
-      do i=1,im
-        lon(i) = lon(i) * deg2rad
+      ! Initialize lat-lon to Cubed bi-linear interpolation coeff:
+      ! populate agrid
+   !    print*,'is,ie,js,je=',is,ie,js,ie
+   !    print*,'size xlon=',size(Init_parm%xlon(:,1)),size(Init_parm%xlon(1,:))
+   !    print*,'size agrid=',size(agrid(:,1,1)),size(agrid(1,:,1)),size(agrid(1,1,:))
+      allocate(s2c(is:ie,js:je,4))
+      allocate(id1(is:ie,js:je))
+      allocate(id2(is:ie,js:je))
+      allocate(jdc(is:ie,js:je))
+      allocate(agrid(is:ie,js:je,2))
+      do j = 1,size(Init_parm%xlon,2)
+         do i = 1,size(Init_parm%xlon,1)
+   !         print*,i,j,is-1+j,js-1+j
+            agrid(is-1+i,js-1+j,1)=Init_parm%xlon(i,j)
+            agrid(is-1+i,js-1+j,2)=Init_parm%xlat(i,j)
+         enddo
       enddo
-      do j=1,jm
-        lat(j) = lat(j) * deg2rad
-      enddo
+      call remap_coef( is, ie, js, je, is, ie, js, je, &
+         im, jm, lon, lat, id1, id2, jdc, s2c, &
+         agrid)
+      deallocate ( lon, lat,agrid )
+   end if
 
-    else
-      call mpp_error(FATAL,'==> Error in IAU_initialize: Expected file '&
-          //trim(fname)//' for DA increment does not exist')
-    endif
-
-    ! Initialize lat-lon to Cubed bi-linear interpolation coeff:
-    ! populate agrid
-!    print*,'is,ie,js,je=',is,ie,js,ie
-!    print*,'size xlon=',size(Init_parm%xlon(:,1)),size(Init_parm%xlon(1,:))
-!    print*,'size agrid=',size(agrid(:,1,1)),size(agrid(1,:,1)),size(agrid(1,1,:))
-    do j = 1,size(Init_parm%xlon,2)
-      do i = 1,size(Init_parm%xlon,1)
-!         print*,i,j,is-1+j,js-1+j
-         agrid(is-1+i,js-1+j,1)=Init_parm%xlon(i,j)
-         agrid(is-1+i,js-1+j,2)=Init_parm%xlat(i,j)
-      enddo
-    enddo
-    call remap_coef( is, ie, js, je, is, ie, js, je, &
-        im, jm, lon, lat, id1, id2, jdc, s2c, &
-        agrid)
-    deallocate ( lon, lat,agrid )
-
-    allocate(IAU_Data%ua_inc(is:ie, js:je, km))
-    allocate(IAU_Data%va_inc(is:ie, js:je, km))
-    allocate(IAU_Data%temp_inc(is:ie, js:je, km))
-    allocate(IAU_Data%delp_inc(is:ie, js:je, km))
-    allocate(IAU_Data%delz_inc(is:ie, js:je, km))
-    allocate(IAU_Data%tracer_inc(is:ie, js:je, km,ntracers))
+    allocate(IAU_Data%ua_inc(is:ie, js:je, npz))
+    allocate(IAU_Data%va_inc(is:ie, js:je, npz))
+    allocate(IAU_Data%temp_inc(is:ie, js:je, npz))
+    allocate(IAU_Data%delp_inc(is:ie, js:je, npz))
+    allocate(IAU_Data%delz_inc(is:ie, js:je, npz))
+    allocate(IAU_Data%tracer_inc(is:ie, js:je, npz,ntracers))
 ! allocate arrays that will hold iau state
-    allocate (iau_state%inc1%ua_inc(is:ie, js:je, km))
-    allocate (iau_state%inc1%va_inc(is:ie, js:je, km))
-    allocate (iau_state%inc1%temp_inc (is:ie, js:je, km))
-    allocate (iau_state%inc1%delp_inc (is:ie, js:je, km))
-    allocate (iau_state%inc1%delz_inc (is:ie, js:je, km))
-    allocate (iau_state%inc1%tracer_inc(is:ie, js:je, km,ntracers))
+    allocate (iau_state%inc1%ua_inc(is:ie, js:je, npz))
+    allocate (iau_state%inc1%va_inc(is:ie, js:je, npz))
+    allocate (iau_state%inc1%temp_inc (is:ie, js:je, npz))
+    allocate (iau_state%inc1%delp_inc (is:ie, js:je, npz))
+    allocate (iau_state%inc1%delz_inc (is:ie, js:je, npz))
+    allocate (iau_state%inc1%tracer_inc(is:ie, js:je, npz,ntracers))
 
     iau_state%hr1=IPD_Control%iaufhrs(1)
     iau_state%wt = 1.0 ! IAU increment filter weights (default 1.0)
@@ -283,12 +307,12 @@ subroutine IAU_initialize (IPD_Control, IAU_Data,Init_parm)
     endif
 
     if (nfiles.GT.1) then  !have multiple files, but only read in 2 at a time and interpoalte between them
-       allocate (iau_state%inc2%ua_inc(is:ie, js:je, km))
-       allocate (iau_state%inc2%va_inc(is:ie, js:je, km))
-       allocate (iau_state%inc2%temp_inc (is:ie, js:je, km))
-       allocate (iau_state%inc2%delp_inc (is:ie, js:je, km))
-       allocate (iau_state%inc2%delz_inc (is:ie, js:je, km))
-       allocate (iau_state%inc2%tracer_inc(is:ie, js:je, km,ntracers))
+       allocate (iau_state%inc2%ua_inc(is:ie, js:je, npz))
+       allocate (iau_state%inc2%va_inc(is:ie, js:je, npz))
+       allocate (iau_state%inc2%temp_inc (is:ie, js:je, npz))
+       allocate (iau_state%inc2%delp_inc (is:ie, js:je, npz))
+       allocate (iau_state%inc2%delz_inc (is:ie, js:je, npz))
+       allocate (iau_state%inc2%tracer_inc(is:ie, js:je, npz,ntracers))
        iau_state%hr2=IPD_Control%iaufhrs(2)
        call read_iau_forcing(IPD_Control,iau_state%inc2,'INPUT/'//trim(IPD_Control%iau_inc_files(2)))
     endif
@@ -436,61 +460,170 @@ subroutine updateiauforcing(IPD_Control,IAU_Data,wt)
  sphum=get_tracer_index(MODEL_ATMOS,'sphum')
  end subroutine setiauforcing
 
+
+subroutine check_ak_bk_consistency(ak_f, bk_f)
+   ! Check that ak, bk in IAU file match those in Atm
+   implicit none
+   real, intent(in), dimension(npz+1) :: ak_f, bk_f
+   integer :: k
+
+   if (size(ak_f) /= size(ak)) then
+      call mpp_error(FATAL, '==> Error in check_ak_bk_consistency: ak dimension mismatch')
+   endif
+   if (size(bk_f) /= size(bk)) then
+      call mpp_error(FATAL, '==> Error in check_ak_bk_consistency: bk dimension mismatch')
+   endif
+
+   do k = 1, size(ak_f)
+      if (abs(ak_f(k) - ak(k)) > 1.0e-6) then
+         print *, '==> ak mismatch at level k=', k
+         print *, '    ak(k)=', ak_f(k), ', should be ak(k)=', ak(k)
+         call mpp_error(FATAL, '==> Error in check_ak_bk_consistency: ak values do not match')
+      endif
+   enddo
+
+   do k = 1, size(bk_f)
+      if (abs(bk_f(k) - bk(k)) > 1.0e-6) then
+         print *, '==> bk mismatch at level k=', k
+         print *, '    bk(k)=', bk_f(k), ', should be bk(k)=', bk(k)
+         call mpp_error(FATAL, '==> Error in check_ak_bk_consistency: bk values do not match')
+      endif
+   enddo
+end subroutine check_ak_bk_consistency
+
+subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
+   ! Read the IAU on the cubed sphere from the specified file
+   ! and populate the increments structure accordingly
+   implicit none
+
+   type(iau_internal_data_type), intent(inout):: increments
+   character(len=*),  intent(in) :: fname_time
+
+   !locals
+   type(FmsNetcdfDomainFile_t) :: FV_tile_IAU, Tra_IAU
+   type(FmsNetcdfFile_t)       :: Fv_IAU
+   real, allocatable:: ak_f(:), bk_f(:)
+   integer :: k, l, ntiles
+   integer, allocatable, dimension(:) :: pes !< Array of the pes in the current pelist
+   character(len=6) :: stile_name
+   character(len=100) :: fname
+
+   allocate ( ak_f(npz+1) )
+   allocate ( bk_f(npz+1) )
+
+   allocate(pes(mpp_npes()))
+   fname = trim(fname_time)//'_core.res.nc'
+   call mpp_get_current_pelist(pes)
+   if (open_file(Fv_IAU,fname,"read", is_restart=.false., pelist=pes)) then
+      call read_data(Fv_IAU, 'ak', ak_f(:))
+      call read_data(Fv_IAU, 'bk', bk_f(:))
+      call close_file(Fv_IAU)
+   else
+      call mpp_error(NOTE,'==> Warning from read_iau_forcing_cubed_sphere: Expected file '//trim(fname)//' does not exist')
+   endif
+   deallocate(pes)
+
+   call check_ak_bk_consistency(ak_f, bk_f)
+   deallocate(ak_f)
+   deallocate(bk_f)
+   
+   ntiles = mpp_get_ntile_count(fv_domain)
+   if(ntiles == 1) then !
+   ! In remap_restart theis conditional also checks for .and. .not. Atm(1)%neststruct%nested) then
+   ! TO DO: ensure that nested grids are supported in the correct way
+      stile_name = '.tile1'
+   else
+      stile_name = ''
+   endif
+
+   fname = trim(fname_time)//'_core.res'//trim(stile_name)//'.nc'
+   if (open_file(Fv_tile_IAU, fname, "read", fv_domain, is_restart=.false.)) then
+      call read_data(Fv_tile_IAU, 'u_inc', increments%ua_inc)
+      call read_data(Fv_tile_IAU, 'v_inc', increments%va_inc)
+      call read_data(Fv_tile_IAU, 'T_inc', increments%temp_inc)
+      call read_data(Fv_tile_IAU, 'delp_inc', increments%delp_inc)
+      call read_data(Fv_tile_IAU, 'delz_inc', increments%delz_inc)
+      call close_file(Fv_tile_IAU)
+   else
+      call mpp_error(NOTE,'==> Warning from read_iau_forcing_cubed_sphere: Expected file '//trim(fname)//' does not exist')
+   endif
+
+   fname = trim(fname_time)//'_tracer.res'//trim(stile_name)//'.nc'
+   if (open_file(Tra_IAU, fname, "read", fv_domain, is_restart=.false.)) then
+      do l=1,ntracers
+         call read_data(Tra_IAU, trim(tracer_names(l))//'_inc', increments%tracer_inc(:,:,:,l))
+      enddo
+      call close_file(Tra_IAU)
+   else
+      call mpp_error(NOTE,'==> Warning from read_iau_forcing_cubed_sphere: Expected file '//trim(fname)//' does not exist')
+   endif
+
+end subroutine read_iau_forcing_cubed_sphere
+
+subroutine read_iau_forcing_gaussian_grid(IPD_Control, increments, fname)
+   ! Read the IAU on the Gaussian grid from the specified file
+   ! and populate the increments structure accordingly
+   implicit none
+   
+   type (IPD_control_type), intent(in) :: IPD_Control
+   type(iau_internal_data_type), intent(inout):: increments
+   character(len=*),  intent(in) :: fname
+
+   !locals
+   integer:: i, j, l, km
+   integer:: j1
+   integer:: jbeg, jend
+   integer :: is,  ie,  js,  je
+
+   is  = IPD_Control%isc
+   ie  = is + IPD_Control%nx-1
+   js  = IPD_Control%jsc
+   je  = js + IPD_Control%ny-1
+
+   if( file_exists(fname) ) then
+      call open_ncfile( fname, ncid )        ! open the file
+   else
+      call mpp_error(FATAL,'==> Error in read_iau_forcing: Expected file '&
+         //trim(fname)//' for DA increment does not exist')
+   endif
+
+   km = IPD_Control%levs
+
+   ! Find bounding latitudes:
+   jbeg = jm-1;         jend = 2
+   do j=js,je
+   do i=is,ie
+      j1 = jdc(i,j)
+      jbeg = min(jbeg, j1)
+      jend = max(jend, j1+1)
+   enddo
+   enddo
+
+   allocate ( wk3(1:im,jbeg:jend, 1:km) )
+   ! read in 1 time level
+   call interp_inc('T_inc',increments%temp_inc(:,:,:),jbeg,jend)
+   call interp_inc('delp_inc',increments%delp_inc(:,:,:),jbeg,jend)
+   call interp_inc('delz_inc',increments%delz_inc(:,:,:),jbeg,jend)
+   call interp_inc('u_inc',increments%ua_inc(:,:,:),jbeg,jend)   ! can these be treated as scalars?
+   call interp_inc('v_inc',increments%va_inc(:,:,:),jbeg,jend)
+   do l=1,ntracers
+      call interp_inc(trim(tracer_names(l))//'_inc',increments%tracer_inc(:,:,:,l),jbeg,jend)
+   enddo
+   call close_ncfile(ncid)
+   deallocate (wk3)
+
+end subroutine read_iau_forcing_gaussian_grid
+
 subroutine read_iau_forcing(IPD_Control,increments,fname)
     type (IPD_control_type), intent(in) :: IPD_Control
     type(iau_internal_data_type), intent(inout):: increments
     character(len=*),  intent(in) :: fname
-!locals
-    real, dimension(:,:,:), allocatable:: u_inc, v_inc
 
-    integer:: i, j, k, l, npz
-    integer:: i1, i2, j1
-    integer:: jbeg, jend
-    real(kind=R_GRID), dimension(2):: p1, p2, p3
-    real(kind=R_GRID), dimension(3):: e1, e2, ex, ey
-
-    logical:: found
-    integer :: is,  ie,  js,  je
-
-    is  = IPD_Control%isc
-    ie  = is + IPD_Control%nx-1
-    js  = IPD_Control%jsc
-    je  = js + IPD_Control%ny-1
-
-    deg2rad = pi/180.
-
-    npz = IPD_Control%levs
-
-    if( file_exists(fname) ) then
-      call open_ncfile( fname, ncid )        ! open the file
+    if (IPD_control%iau_on_cubed_sphere) then
+      call read_iau_forcing_cubed_sphere(increments, fname)
     else
-      call mpp_error(FATAL,'==> Error in read_iau_forcing: Expected file '&
-          //trim(fname)//' for DA increment does not exist')
-    endif
-
-    ! Find bounding latitudes:
-    jbeg = jm-1;         jend = 2
-    do j=js,je
-      do i=is,ie
-          j1 = jdc(i,j)
-        jbeg = min(jbeg, j1)
-        jend = max(jend, j1+1)
-      enddo
-    enddo
-
-    allocate ( wk3(1:im,jbeg:jend, 1:km) )
- ! read in 1 time level
-    call interp_inc('T_inc',increments%temp_inc(:,:,:),jbeg,jend)
-    call interp_inc('delp_inc',increments%delp_inc(:,:,:),jbeg,jend)
-    call interp_inc('delz_inc',increments%delz_inc(:,:,:),jbeg,jend)
-    call interp_inc('u_inc',increments%ua_inc(:,:,:),jbeg,jend)   ! can these be treated as scalars?
-    call interp_inc('v_inc',increments%va_inc(:,:,:),jbeg,jend)
-    do l=1,ntracers
-       call interp_inc(trim(tracer_names(l))//'_inc',increments%tracer_inc(:,:,:,l),jbeg,jend)
-    enddo
-    call close_ncfile(ncid)
-    deallocate (wk3)
-
+      call read_iau_forcing_gaussian_grid(IPD_Control, increments, fname)
+    end if
 
 end subroutine read_iau_forcing
 

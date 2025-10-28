@@ -37,14 +37,18 @@
 
 module fv_iau_mod
 
-  use fms2_io_mod,         only: file_exists
+  use fms2_io_mod,         only: file_exists,          &
+                                 FmsNetcdfDomainFile_t,&
+                                 FmsNetcdfFile_t,      &
+                                 close_file,           &
+                                 open_file
   use mpp_mod,             only: mpp_error,           &
                                  FATAL,               &
                                  NOTE,                &
                                  mpp_pe,              &
                                  mpp_npes,            &
                                  mpp_get_current_pelist
-  use mpp_domains_mod,     only: domain2d
+  use mpp_domains_mod,     only: domain2d, mpp_get_ntile_count
 
   use constants_mod,       only: pi=>pi_8
   use fv_arrays_mod,       only: fv_atmos_type,       &
@@ -493,9 +497,8 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
    type(FmsNetcdfDomainFile_t) :: FV_tile_IAU, Tra_IAU
    type(FmsNetcdfFile_t)       :: Fv_IAU
    real, allocatable:: ak_f(:), bk_f(:)
-   integer :: l
+   integer :: l, ntiles
    integer, allocatable, dimension(:) :: pes !< Array of the pes in the current pelist
-   character(len=100),  intent(in) :: fname
    character(len=6) :: stile_name
 
    allocate ( ak_f(npz+1) )
@@ -517,7 +520,14 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
    deallocate(ak_f)
    deallocate(bk_f)
    
-   stile_name = ''
+   ntiles = mpp_get_ntile_count(fv_domain)
+   if(ntiles == 1) then !
+   ! In remap_restart theis conditional also checks for .and. .not. Atm(1)%neststruct%nested) then
+   ! TO DO: ensure that nested grids are supported in the correct way
+      stile_name = '.tile1'
+   else
+      stile_name = ''
+   endif
 
    fname = 'INPUT/'//trim(fname_time)//'_fv_iau_core.res'//trim(stile_name)//'.nc'
    if (open_file(Fv_tile_IAU, fname, "read", fv_domain, is_restart=.false.)) then

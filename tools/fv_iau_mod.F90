@@ -500,6 +500,7 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
    integer :: l, ntiles
    integer, allocatable, dimension(:) :: pes !< Array of the pes in the current pelist
    character(len=6) :: stile_name
+   character(len=100) :: fname
 
    allocate ( ak_f(npz+1) )
    allocate ( bk_f(npz+1) )

@@ -507,7 +507,7 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
    allocate ( bk_f(npz+1) )
 
    allocate(pes(mpp_npes()))
-   fname = 'INPUT/'//trim(fname_time)//'_fv_iau_core.res.nc'
+   fname = 'INPUT/'//trim(fname_time)//'_core.res.nc'
    call mpp_get_current_pelist(pes)
    if (open_file(Fv_IAU,fname,"read", is_restart=.false., pelist=pes)) then
       call read_data(Fv_IAU, 'ak', ak_f(:))
@@ -531,7 +531,7 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
       stile_name = ''
    endif
 
-   fname = 'INPUT/'//trim(fname_time)//'_fv_iau_core.res'//trim(stile_name)//'.nc'
+   fname = 'INPUT/'//trim(fname_time)//'_core.res'//trim(stile_name)//'.nc'
    if (open_file(Fv_tile_IAU, fname, "read", fv_domain, is_restart=.false.)) then
       call read_data(Fv_tile_IAU, 'u_inc', increments%ua_inc)
       call read_data(Fv_tile_IAU, 'v_inc', increments%va_inc)
@@ -543,7 +543,7 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
       call mpp_error(NOTE,'==> Warning from read_iau_forcing_cubed_sphere: Expected file '//trim(fname)//' does not exist')
    endif
 
-   fname = 'INPUT/'//trim(fname_time)//'_fv_iau_tracer.res'//trim(stile_name)//'.nc'
+   fname = 'INPUT/'//trim(fname_time)//'_tracer.res'//trim(stile_name)//'.nc'
    if (open_file(Tra_IAU, fname, "read", fv_domain, is_restart=.false.)) then
       do l=1,ntracers
          call read_data(Tra_IAU, trim(tracer_names(l))//'_inc', increments%tracer_inc(:,:,:,l))

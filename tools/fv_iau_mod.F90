@@ -41,7 +41,8 @@ module fv_iau_mod
                                  FmsNetcdfDomainFile_t,&
                                  FmsNetcdfFile_t,      &
                                  close_file,           &
-                                 open_file
+                                 open_file,            &
+                                 read_data
   use mpp_mod,             only: mpp_error,           &
                                  FATAL,               &
                                  NOTE,                &

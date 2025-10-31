@@ -506,7 +506,7 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
    type(FmsNetcdfDomainFile_t) :: FV_tile_IAU, Tra_IAU
    type(FmsNetcdfFile_t)       :: Fv_IAU
    real, allocatable:: ak_f(:), bk_f(:)
-   integer :: l, ntiles
+   integer :: k, l, ntiles
    integer, allocatable, dimension(:) :: pes !< Array of the pes in the current pelist
    character(len=6) :: stile_name
    character(len=100) :: fname

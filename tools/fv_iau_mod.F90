@@ -475,22 +475,22 @@ subroutine check_ak_bk_consistency(ak_f, bk_f)
 
    do k = 1, size(ak_f)
       if (abs(ak_f(k) - ak(k)) > 1.0e-6) then
-         if (is_master()) then
+      !   if (is_master()) then
             print *, '==> ak mismatch at level k=', k
             print *, '    ak(k)=', ak_f(k), ', should be ak(k)=', ak(k)
          endif
          call mpp_error(FATAL, '==> Error in check_ak_bk_consistency: ak values do not match')
-      endif
+      !endif
    enddo
 
    do k = 1, size(bk_f)
       if (abs(bk_f(k) - bk(k)) > 1.0e-6) then
-         if (is_master()) then
+        ! if (is_master()) then
             print *, '==> bk mismatch at level k=', k
             print *, '    bk(k)=', bk_f(k), ', should be bk(k)=', bk(k)
          endif
          call mpp_error(FATAL, '==> Error in check_ak_bk_consistency: bk values do not match')
-      endif
+      !endif
    enddo
 end subroutine check_ak_bk_consistency
 
@@ -527,13 +527,13 @@ subroutine read_iau_forcing_cubed_sphere(increments, fname_time)
    deallocate(pes)
 
    ! Print ak and bk values for debugging
-   if (is_master()) then
+  
       print *, '==> ak and bk values from IAU file and FV3:'
       print '(1x,a3,2x,a15,2x,a15,2x,a15,2x,a15)', 'k', 'ak_iau', 'ak', 'bk_iau', 'bk'
       do k = 1, npz+1
          print '(1x,i3,2x,es15.7,2x,es15.7,2x,es15.7,2x,es15.7)', k, ak_f(k), ak(k), bk_f(k), bk(k)
       enddo
-   endif
+
    call check_ak_bk_consistency(ak_f, bk_f)
    deallocate(ak_f)
    deallocate(bk_f)
